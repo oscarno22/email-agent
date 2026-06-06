@@ -1,0 +1,9 @@
+{
+  "dependencies": ["./src"],
+  "graphs": {
+    "agent": "./agent/graph.py:graph"
+  },
+  "env": ".env",
+  "pip_installer": "uv",
+  "image_distro": "wolfi"
+}

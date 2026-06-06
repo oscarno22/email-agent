@@ -1,0 +1,40 @@
+[project]
+name = "agent-x"
+version = "0.1.0"
+description = "Agent"
+readme = "README.md"
+requires-python = ">=3.12, <3.13"
+dependencies = [
+    "langgraph>=1.2.4",
+    "langgraph-api>=0.9.0",
+    "langgraph-cli>=0.4.27",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "pytest>=8.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "N",   # pep8-naming
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
