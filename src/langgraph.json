@@ -7,6 +7,7 @@
     "app": "./agent/webapp.py:app"
   },
   "env": ".env",
+  "python_version": "3.12",
   "pip_installer": "uv",
   "image_distro": "wolfi"
 }
