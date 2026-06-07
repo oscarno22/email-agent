@@ -52,7 +52,8 @@ async def main() -> None:
             input=spec["input"],
             metadata=spec["metadata"],
         )
-        print(f"  created {spec['metadata']['name']} — cron_id={cron['cron_id']}  schedule={spec['schedule']}")
+        name = spec["metadata"]["name"]
+        print(f"  created {name} — cron_id={cron['cron_id']}  schedule={spec['schedule']}")
 
     print("\nDone. Crons are active while the server is running.")
 
