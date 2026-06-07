@@ -137,6 +137,9 @@ def _get_label_id(name: str) -> str:
 
 def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> None:
     """Apply labels and optionally remove from INBOX."""
+    if not labels_to_apply and not archive:
+        logger.info("[gmail] apply_action message=%s — no-op, skipping", message_id)
+        return
     logger.info("[gmail] apply_action message=%s labels=%s archive=%s", message_id, labels_to_apply, archive)
     add_ids = [_get_label_id(name) for name in labels_to_apply]
     remove_ids = ["INBOX"] if archive else []

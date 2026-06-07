@@ -18,7 +18,7 @@ app = FastAPI()
 
 _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
 _LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
-_TRUST_PHASE = os.getenv("TRUST_PHASE", "shadow")
+_TRUST_PHASE = os.getenv("TRUST_PHASE", "label")
 
 # Persists the last-seen historyId across requests so history.list always gets
 # the right startHistoryId (the notification's historyId is the NEW state, not the start).
