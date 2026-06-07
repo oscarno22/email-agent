@@ -19,6 +19,7 @@ def _append_action_log(state: State, plan: ActionPlan) -> None:
         "confidence": round(state.classification.confidence, 2) if state.classification else 0.0,
         "action": plan.notes,
         "trust_phase": state.trust_phase.value,
+        "draft_created": plan.draft_reply is not None,
     }
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     with (_LOG_DIR / f"{date_str}.jsonl").open("a") as f:
@@ -76,6 +77,17 @@ def _action(state: State, plan: ActionPlan) -> State:
         from agent.gmail_client import apply_action
 
         apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
+    elif state.trust_phase == TrustPhase.DRAFT:
+        from agent.gmail_client import apply_action, create_draft
+
+        apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
+        if plan.draft_reply:
+            create_draft(
+                thread_id=state.email.thread_id,
+                to=state.email.sender,
+                subject=state.email.subject,
+                body=plan.draft_reply,
+            )
     _append_action_log(state, plan)
     return state.model_copy(
         update={
@@ -119,23 +131,35 @@ def action_calendar(state: State) -> State:
 
 
 def action_personal(state: State) -> State:
+    draft_reply = None
+    if state.trust_phase == TrustPhase.DRAFT:
+        from agent.drafter import generate_draft
+
+        draft_reply = generate_draft(state.email)
     return _action(
         state,
         ActionPlan(
             labels_to_apply=["Personal"],
             archive=False,
-            notes="label=Personal, keep in inbox",
+            draft_reply=draft_reply,
+            notes="label=Personal, keep in inbox" + (", draft=true" if draft_reply else ""),
         ),
     )
 
 
 def action_work(state: State) -> State:
+    draft_reply = None
+    if state.trust_phase == TrustPhase.DRAFT:
+        from agent.drafter import generate_draft
+
+        draft_reply = generate_draft(state.email)
     return _action(
         state,
         ActionPlan(
             labels_to_apply=["Work"],
             archive=False,
-            notes="label=Work, keep in inbox",
+            draft_reply=draft_reply,
+            notes="label=Work, keep in inbox" + (", draft=true" if draft_reply else ""),
         ),
     )
 

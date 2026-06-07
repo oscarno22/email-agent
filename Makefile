@@ -1,9 +1,13 @@
-.PHONY: start start-docker format check check-fix renew-watch digest setup-crons
+NGROK_DOMAIN ?= mobilize-shrunk-endless.ngrok-free.dev
+LANGGRAPH_PORT ?= 2024
+
+.PHONY: start start-docker ngrok format check check-fix renew-watch digest setup-crons
 
 help:
 	@echo "Available commands:"
 	@echo "  start        - Start agent server in local dev (langgraph dev)"
 	@echo "  start-docker - Start agent server in Docker (langgraph up, requires license)"
+	@echo "  ngrok        - Start ngrok tunnel (NGROK_DOMAIN=$(NGROK_DOMAIN))"
 	@echo "  setup-crons  - Register watch renewal + digest crons on the running server"
 	@echo "  renew-watch  - Run watch renewal once manually"
 	@echo "  digest       - Run digest once manually"
@@ -17,6 +21,9 @@ start:
 	source .venv/bin/activate && \
 	cd .. && \
 	langgraph dev
+
+ngrok:
+	ngrok http --url=$(NGROK_DOMAIN) $(LANGGRAPH_PORT)
 
 start-docker:
 	cd src/agent && \

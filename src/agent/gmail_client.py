@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,47 +21,58 @@ _SRC_DIR = Path(__file__).parent.parent  # src/agent/../ = src/
 CREDENTIALS_PATH = _SRC_DIR / "credentials.json"
 TOKEN_PATH = _SRC_DIR / "token.json"
 
-_service = None
+# Credentials are loaded once; service is per-thread because httplib2 is not thread-safe.
+_creds_lock = threading.Lock()
+_cached_creds: Credentials | None = None
+_local = threading.local()
 _label_id_cache: dict[str, str] = {}
 
 
+def _load_credentials() -> Credentials:
+    global _cached_creds
+    with _creds_lock:
+        if _cached_creds is not None:
+            return _cached_creds
+
+        client_id = os.getenv("GMAIL_CLIENT_ID")
+        client_secret = os.getenv("GMAIL_CLIENT_SECRET")
+        refresh_token = os.getenv("GMAIL_REFRESH_TOKEN")
+
+        if client_id and client_secret and refresh_token:
+            creds = Credentials(
+                token=None,
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=SCOPES,
+            )
+            creds.refresh(Request())
+            logger.debug("[gmail] credentials loaded from env vars")
+        else:
+            creds = None
+            if TOKEN_PATH.exists():
+                creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        str(CREDENTIALS_PATH), SCOPES
+                    )
+                    creds = flow.run_local_server(port=0)
+                TOKEN_PATH.write_text(creds.to_json())
+            logger.debug("[gmail] credentials loaded from token.json")
+
+        _cached_creds = creds
+        return _cached_creds
+
+
 def get_service():
-    global _service
-    if _service is not None:
-        return _service
-
-    client_id = os.getenv("GMAIL_CLIENT_ID")
-    client_secret = os.getenv("GMAIL_CLIENT_SECRET")
-    refresh_token = os.getenv("GMAIL_REFRESH_TOKEN")
-
-    if client_id and client_secret and refresh_token:
-        # Env-var path: works in Docker without credential files.
-        creds = Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=SCOPES,
-        )
-        creds.refresh(Request())
-        logger.debug("[gmail] credentials loaded from env vars")
-    else:
-        # File-based path: used in local dev with credentials.json / token.json.
-        creds = None
-        if TOKEN_PATH.exists():
-            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
-                creds = flow.run_local_server(port=0)
-            TOKEN_PATH.write_text(creds.to_json())
-        logger.debug("[gmail] credentials loaded from token.json")
-
-    _service = build("gmail", "v1", credentials=creds)
-    return _service
+    """Return a per-thread Gmail service instance (httplib2 is not thread-safe)."""
+    if not hasattr(_local, "service"):
+        _local.service = build("gmail", "v1", credentials=_load_credentials())
+    return _local.service
 
 
 def list_history(start_history_id: str) -> list[str]:
@@ -185,6 +197,29 @@ def send_email(to: str, subject: str, body: str) -> None:
         body={"raw": raw},
     ).execute()
     logger.info("[gmail] sent email to=%s subject=%r", to, subject)
+
+
+def create_draft(thread_id: str, to: str, subject: str, body: str) -> str:
+    """Create a Gmail draft reply in the given thread. Returns the draft ID."""
+    from email.mime.text import MIMEText
+
+    subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+    message = MIMEText(body)
+    message["to"] = to
+    message["subject"] = subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    result = (
+        get_service()
+        .users()
+        .drafts()
+        .create(
+            userId="me",
+            body={"message": {"raw": raw, "threadId": thread_id}},
+        )
+        .execute()
+    )
+    logger.info("[gmail] created draft id=%s to=%s subject=%r", result["id"], to, subject)
+    return result["id"]
 
 
 def register_watch(topic_name: str) -> dict:
