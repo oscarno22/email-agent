@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.classifier import classify
@@ -11,7 +11,7 @@ _LOG_DIR = Path(__file__).parent.parent / "logs"
 def _append_action_log(state: State, plan: ActionPlan) -> None:
     _LOG_DIR.mkdir(exist_ok=True)
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "gmail_id": state.email.gmail_id,
         "sender": state.email.sender,
         "subject": state.email.subject,
@@ -20,9 +20,10 @@ def _append_action_log(state: State, plan: ActionPlan) -> None:
         "action": plan.notes,
         "trust_phase": state.trust_phase.value,
     }
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     with (_LOG_DIR / f"{date_str}.jsonl").open("a") as f:
         f.write(json.dumps(entry) + "\n")
+
 
 UNSUBSCRIBE_MARKERS = ("unsubscribe", "manage preferences", "opt out", "opt-out")
 KNOWN_PERSONAL_DOMAINS = {"gmail.com", "icloud.com", "hotmail.com", "outlook.com"}

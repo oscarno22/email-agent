@@ -1,7 +1,7 @@
 import json
 import os
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agent.gmail_client import send_email
@@ -12,7 +12,7 @@ _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
 
 
 def main() -> None:
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
     log_file = _LOG_DIR / f"{yesterday}.jsonl"
 
     if not log_file.exists():

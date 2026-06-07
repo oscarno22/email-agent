@@ -57,7 +57,11 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
         return Response(status_code=400)
 
     start_id = _read_history_id() or str(int(history_id) - 1)
-    logger.info("[webhook] pub/sub received historyId=%s — querying from startHistoryId=%s", history_id, start_id)
+    logger.info(
+        "[webhook] pub/sub received historyId=%s — querying from startHistoryId=%s",
+        history_id,
+        start_id,
+    )
 
     try:
         message_ids = await asyncio.to_thread(list_history, start_id)

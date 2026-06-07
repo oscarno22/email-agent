@@ -1,7 +1,7 @@
 import base64
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -84,7 +84,11 @@ def list_history(start_history_id: str) -> list[str]:
             msg = added["message"]
             if "INBOX" in msg.get("labelIds", []):
                 ids.append(msg["id"])
-    logger.debug("[gmail] history.list returned %d record(s), %d INBOX message(s)", len(result.get("history", [])), len(ids))
+    logger.debug(
+        "[gmail] history.list returned %d record(s), %d INBOX message(s)",
+        len(result.get("history", [])),
+        len(ids),
+    )
     return ids
 
 
@@ -105,13 +109,7 @@ def _extract_plain_text(payload: dict) -> str:
 def fetch_email(message_id: str) -> Email:
     """Fetch a Gmail message and map it to an Email."""
     logger.debug("[gmail] fetching message %s", message_id)
-    msg = (
-        get_service()
-        .users()
-        .messages()
-        .get(userId="me", id=message_id, format="full")
-        .execute()
-    )
+    msg = get_service().users().messages().get(userId="me", id=message_id, format="full").execute()
     headers = {h["name"].lower(): h["value"] for h in msg["payload"].get("headers", [])}
     raw_from = headers.get("from", "")
     if "<" in raw_from and ">" in raw_from:
@@ -119,7 +117,7 @@ def fetch_email(message_id: str) -> Email:
     else:
         sender = raw_from.strip()
     sender_domain = sender.split("@")[-1] if "@" in sender else ""
-    received_at = datetime.fromtimestamp(int(msg["internalDate"]) / 1000, tz=timezone.utc)
+    received_at = datetime.fromtimestamp(int(msg["internalDate"]) / 1000, tz=UTC)
     body = _extract_plain_text(msg["payload"])
     return Email(
         gmail_id=message_id,
@@ -162,7 +160,9 @@ def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> 
     if not labels_to_apply and not archive:
         logger.info("[gmail] apply_action message=%s — no-op, skipping", message_id)
         return
-    logger.info("[gmail] apply_action message=%s labels=%s archive=%s", message_id, labels_to_apply, archive)
+    logger.info(
+        "[gmail] apply_action message=%s labels=%s archive=%s", message_id, labels_to_apply, archive
+    )
     add_ids = [_get_label_id(name) for name in labels_to_apply]
     remove_ids = ["INBOX"] if archive else []
     get_service().users().messages().modify(
