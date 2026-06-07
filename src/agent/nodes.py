@@ -48,6 +48,10 @@ def route_by_category(state: State) -> str:
 def _action(state: State, plan: ActionPlan) -> State:
     if state.trust_phase == TrustPhase.SHADOW:
         plan = plan.model_copy(update={"notes": f"[shadow] would: {plan.notes}"})
+    elif state.trust_phase == TrustPhase.LABEL:
+        from agent.gmail_client import apply_action
+
+        apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
     return state.model_copy(
         update={
             "action": plan,
