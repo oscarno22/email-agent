@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["agent"]
+packages = ["agent", "agent.core", "agent.ingestion", "agent.crons", "agent.stats", "agent.dev"]
 
 [tool.setuptools.package-dir]
 agent = "."
@@ -49,7 +49,7 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 # Long lines inside the inline HTML/CSS/JS template would be uglier if split.
-"dashboard.py" = ["E501"]
+"stats/dashboard.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

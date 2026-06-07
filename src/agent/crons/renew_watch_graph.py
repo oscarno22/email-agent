@@ -3,7 +3,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from agent.gmail_client import register_watch
+from agent.ingestion.gmail_client import register_watch
 
 TOPIC = os.getenv("PUBSUB_TOPIC_NAME", "projects/email-agent-ozzy/topics/gmail-push")
 

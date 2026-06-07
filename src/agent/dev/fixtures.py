@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from agent.state import Email
+from agent.core.state import Email
 
 NEWSLETTER = Email(
     gmail_id="fix-1",

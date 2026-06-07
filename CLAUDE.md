@@ -20,7 +20,7 @@ make check-fix   # ruff check --fix
 Smoke test the graph against fixture emails (requires `ANTHROPIC_API_KEY`):
 
 ```bash
-cd src/agent && uv run python -m agent.smoke
+cd src/agent && uv run python -m agent.dev.smoke
 ```
 
 No test suite yet — `pytest` is in dev deps but unused.
@@ -32,25 +32,33 @@ No test suite yet — `pytest` is in dev deps but unused.
 - `.env` lives at **`src/.env`** (loaded by `langgraph.json`), not the repo root. `ANTHROPIC_API_KEY` is required; `LANGSMITH_*` keys are optional tracing.
 - Python is pinned to `>=3.12, <3.13`.
 
+## Package layout
+
+`src/agent/` is split into five subpackages:
+
+| Subpackage | What it contains |
+|---|---|
+| `core/` | LangGraph graph pipeline — `state`, `graph`, `nodes`, `classifier`, `drafter`, `rules` |
+| `ingestion/` | Email delivery — `gmail_client` (OAuth + API wrapper), `webapp` (POST /webhook/pubsub) |
+| `crons/` | Scheduled tasks — `digest`, `renew_watch`, their LangGraph graph wrappers, `setup_crons` |
+| `stats/` | Persistence & UI — `db` (SQLite), `events` (SSE bus), `backfill`, `dashboard` |
+| `dev/` | Dev tooling — `fixtures` (sample emails), `smoke` (smoke test runner) |
+
 ## Architecture
 
-Read **`src/agent/state.py`** first — it's the schema contract for everything.
+Read **`src/agent/core/state.py`** first — it's the schema contract for everything.
 
-The graph (`src/agent/graph.py`) is a linear pipeline with a fan-out at the end:
+The graph (`src/agent/core/graph.py`) is a linear pipeline with a fan-out at the end:
 
 ```
 START → extract_features → classify → [route by category] → action_<category> → END
 ```
 
-- **`extract_features`** (`nodes.py`): cheap deterministic signals (unsubscribe markers, links, sender-domain check). No LLM.
-- **`classify`** (`classifier.py`): forced tool use on `classify_email`. **Two-tier cost strategy**: Haiku first; if `confidence < 0.6`, escalate to Sonnet and mark `needs_escalation=True`. The category enum exposed to the model excludes `UNKNOWN` — `UNKNOWN` is reserved for code paths the model can't pick.
-- **Conditional routing**: `route_by_category` returns the category string; `CATEGORY_NODES` (a dict in `nodes.py`) maps each `Category` value to its action node. To add a category: add to the `Category` enum, add an entry to `CATEGORY_NODES`, write the action function. The graph wiring picks it up automatically.
+- **`extract_features`** (`core/nodes.py`): cheap deterministic signals (unsubscribe markers, links, sender-domain check). No LLM.
+- **`classify`** (`core/classifier.py`): forced tool use on `classify_email`. **Two-tier cost strategy**: Haiku first; if `confidence < 0.6`, escalate to Sonnet and mark `needs_escalation=True`. The category enum exposed to the model excludes `UNKNOWN` — `UNKNOWN` is reserved for code paths the model can't pick.
+- **Conditional routing**: `route_by_category` returns the category string; `CATEGORY_NODES` (a dict in `core/nodes.py`) maps each `Category` value to its action node. To add a category: add to the `Category` enum, add an entry to `CATEGORY_NODES`, write the action function. The graph wiring picks it up automatically.
 - **Action nodes**: each builds an `ActionPlan` and calls `_action()`. **`_action()` enforces the trust gradient**: in `TrustPhase.SHADOW`, it rewrites the plan's notes to `[shadow] would: …` so nothing actually fires. Real Gmail mutations would gate on `trust_phase` here.
 
-The classifier prompt receives **user-editable rules** from `rules.py` (`DEFAULT_RULES`) prepended to each message. This is the chosen "learning" mechanism — *not* adaptive fine-tuning. Tweak `rules.py` to change classification behavior before touching the prompt.
+The classifier prompt receives **user-editable rules** from `core/rules.py` (`DEFAULT_RULES`) prepended to each message. This is the chosen "learning" mechanism — *not* adaptive fine-tuning. Tweak `rules.py` to change classification behavior before touching the prompt.
 
 State is a Pydantic `BaseModel` updated immutably via `model_copy(update=…)` between nodes (not LangGraph's typed-dict pattern). Each node appends to `state.log` for traceability.
-
-## What's not built yet
-
-The big missing piece is the **trigger**: Gmail Push → GCP Pub/Sub → webhook → `users.history.list`. Today the graph runs against pasted JSON in LangGraph Studio or fixtures from `fixtures.py`. The action nodes also don't yet call `gmail.modify` — graduating from shadow → label phase requires wiring real Gmail API calls behind the trust-phase check in `_action()`.

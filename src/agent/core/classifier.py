@@ -2,8 +2,8 @@ import os
 
 from anthropic import Anthropic
 
-from agent.rules import DEFAULT_RULES
-from agent.state import Category, Classification
+from agent.core.rules import DEFAULT_RULES
+from agent.core.state import Category, Classification
 
 HAIKU = "claude-haiku-4-5-20251001"
 SONNET = "claude-sonnet-4-6"

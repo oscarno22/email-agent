@@ -2,7 +2,7 @@ import os
 
 from anthropic import Anthropic
 
-from agent.state import Email
+from agent.core.state import Email
 
 SONNET = "claude-sonnet-4-6"
 

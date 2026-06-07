@@ -10,9 +10,9 @@ import json
 import sys
 from pathlib import Path
 
-from agent.db import init_db, record_event
+from agent.stats.db import init_db, record_event
 
-_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 
 
 def _domain_from_sender(sender: str) -> str:

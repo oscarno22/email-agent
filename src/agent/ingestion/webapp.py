@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from langgraph_sdk import get_client
 
-from agent.gmail_client import fetch_email, list_history
+from agent.ingestion.gmail_client import fetch_email, list_history
 
 logging.getLogger("agent").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ _TRUST_PHASE = os.getenv("TRUST_PHASE", "label")
 
 # Persists the last-seen historyId across requests so history.list always gets
 # the right startHistoryId (the notification's historyId is the NEW state, not the start).
-_HISTORY_ID_FILE = Path(__file__).parent.parent / "last_history_id.txt"
+_HISTORY_ID_FILE = Path(__file__).parent.parent.parent / "last_history_id.txt"
 _GMAIL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # UUID URL namespace
 
 

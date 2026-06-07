@@ -3,14 +3,14 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.classifier import classify
-from agent.db import record_event
-from agent.events import publish
-from agent.state import ActionPlan, Category, Features, State, TrustPhase
+from agent.core.classifier import classify
+from agent.core.state import ActionPlan, Category, Features, State, TrustPhase
+from agent.stats.db import record_event
+from agent.stats.events import publish
 
 logger = logging.getLogger(__name__)
 
-_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 
 _CATEGORY_ACCENT = {
     "newsletter": "#6b8afd",
@@ -134,11 +134,11 @@ def _action(state: State, plan: ActionPlan) -> State:
     if state.trust_phase == TrustPhase.SHADOW:
         plan = plan.model_copy(update={"notes": f"[shadow] would: {plan.notes}"})
     elif state.trust_phase == TrustPhase.LABEL:
-        from agent.gmail_client import apply_action
+        from agent.ingestion.gmail_client import apply_action
 
         apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
     elif state.trust_phase == TrustPhase.DRAFT:
-        from agent.gmail_client import apply_action, create_draft
+        from agent.ingestion.gmail_client import apply_action, create_draft
 
         apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
         if plan.draft_reply:
@@ -193,7 +193,7 @@ def action_calendar(state: State) -> State:
 def action_personal(state: State) -> State:
     draft_reply = None
     if state.trust_phase == TrustPhase.DRAFT:
-        from agent.drafter import generate_draft
+        from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)
     return _action(
@@ -210,7 +210,7 @@ def action_personal(state: State) -> State:
 def action_work(state: State) -> State:
     draft_reply = None
     if state.trust_phase == TrustPhase.DRAFT:
-        from agent.drafter import generate_draft
+        from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)
     return _action(

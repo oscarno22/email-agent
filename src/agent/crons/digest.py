@@ -4,10 +4,10 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from agent.gmail_client import send_email
-from agent.state import Category
+from agent.core.state import Category
+from agent.ingestion.gmail_client import send_email
 
-_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
 
 

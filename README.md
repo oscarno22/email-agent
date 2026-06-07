@@ -44,11 +44,12 @@ START → extract_features → classify → [route by category] → action_<cate
   fanned out over SSE to the dashboard's live feed.
 
 The classifier prompt is steered by a user-editable rules list in
-[`rules.py`](src/agent/rules.py) — this is the chosen "learning" mechanism,
-not adaptive fine-tuning. Edit those rules to nudge classification behavior.
+[`core/rules.py`](src/agent/core/rules.py) — this is the chosen "learning"
+mechanism, not adaptive fine-tuning. Edit those rules to nudge classification
+behavior.
 
-State lives in [`state.py`](src/agent/state.py) as a Pydantic model and is
-updated immutably between nodes. Every node appends to `state.log` for
+State lives in [`core/state.py`](src/agent/core/state.py) as a Pydantic model
+and is updated immutably between nodes. Every node appends to `state.log` for
 traceability.
 
 ### Trust gradient
@@ -82,7 +83,7 @@ make dashboard
 # Open http://localhost:8765
 
 # 4. Smoke-test against built-in fixtures
-cd src/agent && uv run python -m agent.smoke
+cd src/agent && uv run python -m agent.dev.smoke
 ```
 
 For the live ingestion pipeline (Pub/Sub → webhook → graph) see
@@ -100,6 +101,18 @@ make check         # ruff check --diff
 make check-fix     # ruff check --fix
 ```
 
+### Processes at a glance
+
+The full application is three concurrent processes:
+
+| Process | Command | What it does |
+|---|---|---|
+| LangGraph server | `make start` | Runs the graph + webhook receiver on `:2024`. This is the only required process — it handles both email classification and the Pub/Sub webhook. |
+| ngrok tunnel | `make ngrok` | Forwards GCP Pub/Sub push notifications to `localhost:2024`. Required for live ingestion; not needed when testing with fixtures. |
+| Dashboard | `make dashboard` | Standalone stats UI on `:8765`. Shows historical data; for real-time SSE cards, merge `stats.dashboard:app` routes into `ingestion.webapp` so they share a process. |
+
+Scheduled tasks (`digest`, `renew_watch`) run inside the LangGraph server as registered crons — not as separate processes. They're registered once with `make setup-crons`.
+
 ### Dev setup (live ingestion)
 
 1. **Terminal 1:** `make start` — LangGraph server on `:2024`
@@ -115,33 +128,40 @@ make check-fix     # ruff check --fix
 src/
   langgraph.json         # LangGraph CLI config (graphs + http app + env)
   .env                   # ANTHROPIC_API_KEY, TRUST_PHASE, PUBSUB_VERIFICATION_TOKEN, ENABLE_CRONS
-  stats.db               # SQLite stats DB (gitignored, written by db.py)
+  stats.db               # SQLite stats DB (gitignored)
   last_history_id.txt    # Gmail history cursor (gitignored)
   logs/YYYY-MM-DD.jsonl  # daily append-only action logs (digest input)
   agent/
-    state.py             # Pydantic schema (incl. UI message reducer) — read this first
-    graph.py             # Main graph wiring (StateGraph + conditional edges)
-    nodes.py             # extract_features, action_*, trust-phase gate, stats + UI emit
-    classifier.py        # Haiku → Sonnet escalation, forced tool use
-    rules.py             # User-editable classification rules
-    fixtures.py          # Sample emails for the smoke test
-    smoke.py             # Runs the graph against all fixtures
+    pyproject.toml       # uv project root
 
-    gmail_client.py      # OAuth2 + Gmail API (history, fetch, modify, watch, drafts, send)
-    webapp.py            # POST /webhook/pubsub — turns Pub/Sub messages into graph runs
-    drafter.py           # Generates reply drafts for personal/work in draft phase
-    digest.py            # Daily summary email from yesterday's JSONL
-    digest_graph.py      # LangGraph wrapper for the digest cron
-    renew_watch.py       # Standalone watch-renewal script
-    renew_watch_graph.py # LangGraph wrapper for the watch-renewal cron
-    setup_crons.py       # Registers crons via the LangGraph SDK (ENABLE_CRONS gated)
+    core/                # LangGraph graph pipeline
+      state.py           # Pydantic schema (incl. UI message reducer) — read this first
+      graph.py           # StateGraph wiring + conditional edges
+      nodes.py           # extract_features, action_*, trust-phase gate, stats + UI emit
+      classifier.py      # Haiku → Sonnet escalation, forced tool use
+      drafter.py         # Reply draft generation for personal/work emails
+      rules.py           # User-editable classification rules
 
-    db.py                # SQLite stats sink (portable schema, Postgres-ready)
-    backfill.py          # One-off JSONL → SQLite import
-    events.py            # In-process pub/sub bus that powers the dashboard SSE
-    dashboard.py         # FastAPI dashboard: stats, recent events, live card feed
+    ingestion/           # Email delivery: Gmail push → webhook → graph run
+      gmail_client.py    # OAuth2 + Gmail API (history, fetch, modify, watch, drafts, send)
+      webapp.py          # POST /webhook/pubsub — turns Pub/Sub messages into graph runs
 
-    pyproject.toml       # uv project lives here, not at repo root
+    crons/               # Scheduled tasks (run inside the LangGraph server)
+      digest.py          # Daily summary email from yesterday's JSONL
+      digest_graph.py    # LangGraph graph wrapper for the digest cron
+      renew_watch.py     # Watch-renewal script (also runnable standalone)
+      renew_watch_graph.py # LangGraph graph wrapper for the watch-renewal cron
+      setup_crons.py     # Registers crons via the LangGraph SDK (ENABLE_CRONS gated)
+
+    stats/               # Persistence and dashboard UI
+      db.py              # SQLite stats sink (portable schema, Postgres-ready)
+      backfill.py        # One-off JSONL → SQLite import
+      events.py          # In-process pub/sub bus that powers the dashboard SSE
+      dashboard.py       # FastAPI dashboard: stats, recent events, live card feed
+
+    dev/                 # Developer tooling (not used in production)
+      fixtures.py        # Sample emails for smoke testing
+      smoke.py           # Runs the graph against all fixtures
 ```
 
 ## Stats & dashboard

@@ -17,7 +17,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_PATH = Path(__file__).parent.parent / "stats.db"
+_DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "stats.db"
 
 
 def _db_path() -> Path:

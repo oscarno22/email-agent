@@ -38,28 +38,28 @@ start-docker:
 renew-watch:
 	cd src/agent && \
 	source .venv/bin/activate && \
-	uv run python -m agent.renew_watch
+	uv run python -m agent.crons.renew_watch
 
 digest:
 	cd src/agent && \
 	source .venv/bin/activate && \
-	uv run python -m agent.digest
+	uv run python -m agent.crons.digest
 
 setup-crons:
 	cd src/agent && \
 	source .venv/bin/activate && \
-	uv run python -m agent.setup_crons
+	uv run python -m agent.crons.setup_crons
 
 dashboard:
 	cd src/agent && \
 	uv sync && \
 	source .venv/bin/activate && \
-	uv run uvicorn agent.dashboard:app --host 127.0.0.1 --port $(DASHBOARD_PORT) --reload
+	uv run uvicorn agent.stats.dashboard:app --host 127.0.0.1 --port $(DASHBOARD_PORT) --reload
 
 backfill:
 	cd src/agent && \
 	source .venv/bin/activate && \
-	uv run python -m agent.backfill
+	uv run python -m agent.stats.backfill
 
 format:
 	cd src/agent && \

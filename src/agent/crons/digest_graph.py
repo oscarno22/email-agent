@@ -2,7 +2,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from agent.digest import main as run_digest
+from agent.crons.digest import main as run_digest
 
 
 class DigestState(TypedDict, total=False):

@@ -3,9 +3,9 @@
 uv run python -m agent.smoke
 """
 
-from agent.fixtures import ALL
-from agent.graph import graph
-from agent.state import State
+from agent.core.graph import graph
+from agent.core.state import State
+from agent.dev.fixtures import ALL
 
 
 def main() -> None:

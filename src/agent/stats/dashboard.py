@@ -20,7 +20,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
-from agent.db import (
+from agent.stats.db import (
     get_category_breakdown,
     get_daily_counts,
     get_recent_events,
@@ -28,7 +28,7 @@ from agent.db import (
     get_totals,
     init_db,
 )
-from agent.events import attach_loop, subscribe
+from agent.stats.events import attach_loop, subscribe
 
 logger = logging.getLogger(__name__)
 

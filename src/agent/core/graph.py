@@ -1,12 +1,12 @@
 from langgraph.graph import END, START, StateGraph
 
-from agent.nodes import (
+from agent.core.nodes import (
     CATEGORY_NODES,
     classify_node,
     extract_features,
     route_by_category,
 )
-from agent.state import State
+from agent.core.state import State
 
 
 def create_graph():

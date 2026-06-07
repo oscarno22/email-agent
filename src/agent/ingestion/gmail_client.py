@@ -10,14 +10,14 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from agent.state import Email
+from agent.core.state import Email
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
-_SRC_DIR = Path(__file__).parent.parent  # src/agent/../ = src/
+_SRC_DIR = Path(__file__).parent.parent.parent  # src/agent/ingestion/../../.. = src/
 CREDENTIALS_PATH = _SRC_DIR / "credentials.json"
 TOKEN_PATH = _SRC_DIR / "token.json"
 
