@@ -21,11 +21,7 @@ def generate_draft(email: Email, client: Anthropic | None = None) -> str:
         messages=[
             {
                 "role": "user",
-                "content": (
-                    f"From: {email.sender}\n"
-                    f"Subject: {email.subject}\n\n"
-                    f"{email.body}"
-                ),
+                "content": (f"From: {email.sender}\nSubject: {email.subject}\n\n{email.body}"),
             }
         ],
     )

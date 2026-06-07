@@ -1,17 +1,48 @@
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.classifier import classify
+from agent.db import record_event
+from agent.events import publish
 from agent.state import ActionPlan, Category, Features, State, TrustPhase
+
+logger = logging.getLogger(__name__)
 
 _LOG_DIR = Path(__file__).parent.parent / "logs"
 
+_CATEGORY_ACCENT = {
+    "newsletter": "#6b8afd",
+    "receipt": "#8e6bfd",
+    "calendar": "#fd9b6b",
+    "personal": "#3ec48f",
+    "work": "#3ec4c4",
+    "junk": "#d35d6e",
+    "unknown": "#9aa0a6",
+}
 
-def _append_action_log(state: State, plan: ActionPlan) -> None:
-    _LOG_DIR.mkdir(exist_ok=True)
+
+def _ui_props(state: State, plan: ActionPlan, ts: str) -> dict:
+    cat = state.classification.category.value if state.classification else "unknown"
+    return {
+        "ts": ts,
+        "gmail_id": state.email.gmail_id,
+        "sender": state.email.sender,
+        "subject": state.email.subject,
+        "category": cat,
+        "confidence": round(state.classification.confidence, 2) if state.classification else 0.0,
+        "action_notes": plan.notes,
+        "trust_phase": state.trust_phase.value,
+        "draft_created": plan.draft_reply is not None,
+        "accent_color": _CATEGORY_ACCENT.get(cat, "#9aa0a6"),
+    }
+
+
+def _append_action_log(state: State, plan: ActionPlan) -> dict:
+    ts = datetime.now(UTC).isoformat()
     entry = {
-        "ts": datetime.now(UTC).isoformat(),
+        "ts": ts,
         "gmail_id": state.email.gmail_id,
         "sender": state.email.sender,
         "subject": state.email.subject,
@@ -21,9 +52,38 @@ def _append_action_log(state: State, plan: ActionPlan) -> None:
         "trust_phase": state.trust_phase.value,
         "draft_created": plan.draft_reply is not None,
     }
+    _LOG_DIR.mkdir(exist_ok=True)
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     with (_LOG_DIR / f"{date_str}.jsonl").open("a") as f:
         f.write(json.dumps(entry) + "\n")
+
+    record_event(
+        ts=ts,
+        gmail_id=state.email.gmail_id,
+        thread_id=state.email.thread_id,
+        sender=state.email.sender,
+        sender_domain=state.email.sender_domain,
+        subject=state.email.subject,
+        category=entry["category"],
+        confidence=entry["confidence"],
+        action_notes=plan.notes,
+        trust_phase=state.trust_phase.value,
+        draft_created=plan.draft_reply is not None,
+    )
+
+    ui_props = _ui_props(state, plan, ts)
+    publish({"type": "email_processed", "props": ui_props})
+
+    try:
+        from langgraph.graph.ui import push_ui_message
+
+        push_ui_message("email_card", ui_props)
+    except Exception:
+        # push_ui_message only works inside a LangGraph run context; the
+        # smoke script & dashboard invocations don't have one, so swallow.
+        logger.debug("[nodes] push_ui_message skipped (no run context)")
+
+    return entry
 
 
 UNSUBSCRIBE_MARKERS = ("unsubscribe", "manage preferences", "opt out", "opt-out")

@@ -57,9 +57,7 @@ def _load_credentials() -> Credentials:
                 if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
                 else:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        str(CREDENTIALS_PATH), SCOPES
-                    )
+                    flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
                     creds = flow.run_local_server(port=0)
                 TOKEN_PATH.write_text(creds.to_json())
             logger.debug("[gmail] credentials loaded from token.json")

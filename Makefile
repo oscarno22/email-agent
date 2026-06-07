@@ -1,13 +1,16 @@
 NGROK_DOMAIN ?= mobilize-shrunk-endless.ngrok-free.dev
 LANGGRAPH_PORT ?= 2024
+DASHBOARD_PORT ?= 8765
 
-.PHONY: start start-docker ngrok format check check-fix renew-watch digest setup-crons
+.PHONY: start start-docker ngrok format check check-fix renew-watch digest setup-crons dashboard backfill
 
 help:
 	@echo "Available commands:"
 	@echo "  start        - Start agent server in local dev (langgraph dev)"
 	@echo "  start-docker - Start agent server in Docker (langgraph up, requires license)"
 	@echo "  ngrok        - Start ngrok tunnel (NGROK_DOMAIN=$(NGROK_DOMAIN))"
+	@echo "  dashboard    - Start stats dashboard on http://localhost:$(DASHBOARD_PORT)"
+	@echo "  backfill     - Backfill JSONL action logs into SQLite stats DB"
 	@echo "  setup-crons  - Register watch renewal + digest crons on the running server"
 	@echo "  renew-watch  - Run watch renewal once manually"
 	@echo "  digest       - Run digest once manually"
@@ -46,6 +49,17 @@ setup-crons:
 	cd src/agent && \
 	source .venv/bin/activate && \
 	uv run python -m agent.setup_crons
+
+dashboard:
+	cd src/agent && \
+	uv sync && \
+	source .venv/bin/activate && \
+	uv run uvicorn agent.dashboard:app --host 127.0.0.1 --port $(DASHBOARD_PORT) --reload
+
+backfill:
+	cd src/agent && \
+	source .venv/bin/activate && \
+	uv run python -m agent.backfill
 
 format:
 	cd src/agent && \

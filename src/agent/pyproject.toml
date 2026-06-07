@@ -47,6 +47,10 @@ select = [
     "N",   # pep8-naming
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Long lines inside the inline HTML/CSS/JS template would be uglier if split.
+"dashboard.py" = ["E501"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

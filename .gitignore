@@ -56,4 +56,10 @@ last_history_id.txt
 # Action logs (runtime data)
 src/logs/
 
+# Stats DB (SQLite, runtime data)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 .mcp.json
