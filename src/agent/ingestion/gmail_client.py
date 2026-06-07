@@ -73,6 +73,31 @@ def get_service():
     return _local.service
 
 
+def list_unread(max_results: int = 100) -> list[str]:
+    """Return message IDs of unread messages in INBOX."""
+    logger.debug("[gmail] messages.list(q=is:unread in:inbox, max=%d)", max_results)
+    result = (
+        get_service()
+        .users()
+        .messages()
+        .list(userId="me", q="is:unread in:inbox", maxResults=max_results)
+        .execute()
+    )
+    ids = [m["id"] for m in result.get("messages", [])]
+    logger.debug("[gmail] list_unread found %d message(s)", len(ids))
+    return ids
+
+
+def mark_as_read(message_id: str) -> None:
+    """Remove the UNREAD label from a message."""
+    logger.debug("[gmail] mark_as_read message=%s", message_id)
+    get_service().users().messages().modify(
+        userId="me",
+        id=message_id,
+        body={"removeLabelIds": ["UNREAD"]},
+    ).execute()
+
+
 def list_history(start_history_id: str) -> list[str]:
     """Return message IDs for new INBOX messages since startHistoryId."""
     logger.debug("[gmail] history.list(startHistoryId=%s)", start_history_id)

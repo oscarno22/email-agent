@@ -16,10 +16,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from agent.core.state import TrustPhase
+from agent.ingestion.batch_review import _status as _batch_status, run_batch_review
 from agent.stats.db import (
     get_category_breakdown,
     get_daily_counts,
@@ -29,6 +32,8 @@ from agent.stats.db import (
     init_db,
 )
 from agent.stats.events import attach_loop, subscribe
+
+_LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +72,39 @@ async def api_stream() -> StreamingResponse:
             yield f"data: {json.dumps(evt)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.post("/api/batch-review")
+async def api_batch_review(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
+    body = await request.json()
+    trust_phase_str = str(body.get("trust_phase", "label")).lower()
+    try:
+        trust_phase = TrustPhase(trust_phase_str)
+    except ValueError:
+        trust_phase = TrustPhase.LABEL
+    mark_read = bool(body.get("mark_read", True))
+    max_emails = min(int(body.get("max_emails", 50)), 500)
+
+    if _batch_status.running:
+        return JSONResponse(
+            {"status": "running", "processed": _batch_status.processed, "total": _batch_status.total},
+            status_code=409,
+        )
+
+    background_tasks.add_task(run_batch_review, trust_phase, mark_read, max_emails, _LANGGRAPH_URL)
+    return JSONResponse({"status": "started"}, status_code=202)
+
+
+@app.get("/api/batch-review/status")
+async def api_batch_review_status() -> JSONResponse:
+    return JSONResponse({
+        "running": _batch_status.running,
+        "total": _batch_status.total,
+        "processed": _batch_status.processed,
+        "failed": _batch_status.failed,
+        "last_run_ts": _batch_status.last_run_ts,
+        "last_run_summary": _batch_status.last_run_summary,
+    })
 
 
 _INDEX_HTML = """<!doctype html>
@@ -139,6 +177,20 @@ _INDEX_HTML = """<!doctype html>
   .badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.08); }
   .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ec48f; box-shadow: 0 0 6px #3ec48f; }
+  .batch-controls { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; margin-top: 8px; }
+  .batch-field { display: flex; flex-direction: column; gap: 6px; }
+  .field-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .btn-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .btn-opt { background: transparent; color: var(--muted); border: none; padding: 6px 14px; cursor: pointer; font-size: 13px; transition: background .15s, color .15s; }
+  .btn-opt:hover { background: var(--panel-2); color: var(--text); }
+  .btn-opt.active { background: var(--accent); color: #fff; }
+  .check-label { color: var(--text); font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .num-input { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; width: 80px; }
+  .run-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity .15s; }
+  .run-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .progress-wrap { background: var(--panel-2); border-radius: 4px; height: 6px; overflow: hidden; margin-top: 16px; }
+  .progress-bar { height: 100%; background: var(--accent); transition: width .3s ease; border-radius: 4px; }
+  .batch-status-text { color: var(--muted); font-size: 12px; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -148,6 +200,35 @@ _INDEX_HTML = """<!doctype html>
   </div>
 
   <div class="grid" id="stat-grid"></div>
+
+  <div class="panel" style="margin-bottom:24px">
+    <h2>Batch Review</h2>
+    <div class="batch-controls">
+      <div class="batch-field">
+        <span class="field-label">Trust Phase</span>
+        <div class="btn-group" id="trust-group">
+          <button class="btn-opt" data-value="shadow">Shadow</button>
+          <button class="btn-opt active" data-value="label">Label</button>
+          <button class="btn-opt" data-value="draft">Draft</button>
+        </div>
+      </div>
+      <div class="batch-field">
+        <span class="field-label">Options</span>
+        <label class="check-label"><input type="checkbox" id="mark-read" checked> Mark as read after processing</label>
+      </div>
+      <div class="batch-field">
+        <span class="field-label">Max Emails</span>
+        <input type="number" id="max-emails" value="50" min="1" max="500" class="num-input">
+      </div>
+      <div class="batch-field" style="align-self:flex-end">
+        <button id="run-btn" class="run-btn" onclick="runBatch()">Run Batch Review</button>
+      </div>
+    </div>
+    <div id="batch-progress" style="display:none">
+      <div class="progress-wrap"><div id="progress-bar" class="progress-bar" style="width:0%"></div></div>
+      <div id="batch-status-text" class="batch-status-text"></div>
+    </div>
+  </div>
 
   <div class="row">
     <div class="panel">
@@ -306,6 +387,48 @@ function escapeHtml(s) {
     .replaceAll("'", "&#39;");
 }
 
+let _batchPhase = "label";
+
+document.querySelectorAll("#trust-group .btn-opt").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#trust-group .btn-opt").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    _batchPhase = btn.dataset.value;
+    const markRead = document.getElementById("mark-read");
+    markRead.disabled = _batchPhase === "shadow";
+    if (_batchPhase === "shadow") markRead.checked = false;
+  });
+});
+
+function showBatchProgress(processed, total, text) {
+  document.getElementById("batch-progress").style.display = "block";
+  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+  document.getElementById("progress-bar").style.width = pct + "%";
+  document.getElementById("batch-status-text").textContent = text;
+}
+
+async function runBatch() {
+  const btn = document.getElementById("run-btn");
+  const markRead = document.getElementById("mark-read").checked;
+  const maxEmails = parseInt(document.getElementById("max-emails").value, 10) || 50;
+  btn.disabled = true;
+  showBatchProgress(0, 0, "Starting…");
+  try {
+    const resp = await fetch("/api/batch-review", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({trust_phase: _batchPhase, mark_read: markRead, max_emails: maxEmails}),
+    });
+    if (resp.status === 409) {
+      document.getElementById("batch-status-text").textContent = "A run is already in progress.";
+      btn.disabled = false;
+    }
+  } catch (e) {
+    document.getElementById("batch-status-text").textContent = "Failed to start: " + e.message;
+    btn.disabled = false;
+  }
+}
+
 async function refresh() {
   const [stats, recent] = await Promise.all([
     fetch("/api/stats").then(r => r.json()),
@@ -326,6 +449,15 @@ function connectStream() {
       const evt = JSON.parse(msg.data);
       if (evt.type === "email_processed") {
         pushCard(evt.props);
+        refresh();
+      } else if (evt.type === "batch_start") {
+        showBatchProgress(0, evt.props.total, `Found ${evt.props.total} unread — processing…`);
+      } else if (evt.type === "batch_progress") {
+        showBatchProgress(evt.props.processed, evt.props.total, `${evt.props.processed} / ${evt.props.total} processed`);
+      } else if (evt.type === "batch_complete") {
+        const failed = evt.props.failed > 0 ? `, ${evt.props.failed} failed` : "";
+        showBatchProgress(evt.props.processed, evt.props.total, `Done — ${evt.props.processed} processed${failed}`);
+        document.getElementById("run-btn").disabled = false;
         refresh();
       }
     } catch (e) { console.error(e); }
