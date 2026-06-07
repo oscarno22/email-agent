@@ -33,8 +33,11 @@ def _gmail_thread_uuid(gmail_thread_id: str) -> str:
 
 def _read_history_id() -> str | None:
     if _HISTORY_ID_FILE.exists():
-        return _HISTORY_ID_FILE.read_text().strip() or None
-    return None
+        stored = _HISTORY_ID_FILE.read_text().strip()
+        if stored:
+            return stored
+    # Fall back to env var so Docker containers can bootstrap without a mounted file.
+    return os.getenv("GMAIL_INITIAL_HISTORY_ID") or None
 
 
 def _write_history_id(history_id: str) -> None:

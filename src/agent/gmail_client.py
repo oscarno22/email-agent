@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,16 +28,37 @@ def get_service():
     global _service
     if _service is not None:
         return _service
-    creds = None
-    if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
-            creds = flow.run_local_server(port=0)
-        TOKEN_PATH.write_text(creds.to_json())
+
+    client_id = os.getenv("GMAIL_CLIENT_ID")
+    client_secret = os.getenv("GMAIL_CLIENT_SECRET")
+    refresh_token = os.getenv("GMAIL_REFRESH_TOKEN")
+
+    if client_id and client_secret and refresh_token:
+        # Env-var path: works in Docker without credential files.
+        creds = Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=SCOPES,
+        )
+        creds.refresh(Request())
+        logger.debug("[gmail] credentials loaded from env vars")
+    else:
+        # File-based path: used in local dev with credentials.json / token.json.
+        creds = None
+        if TOKEN_PATH.exists():
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
+                creds = flow.run_local_server(port=0)
+            TOKEN_PATH.write_text(creds.to_json())
+        logger.debug("[gmail] credentials loaded from token.json")
+
     _service = build("gmail", "v1", credentials=creds)
     return _service
 
