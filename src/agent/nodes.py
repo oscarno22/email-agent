@@ -1,5 +1,28 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
 from agent.classifier import classify
 from agent.state import ActionPlan, Category, Features, State, TrustPhase
+
+_LOG_DIR = Path(__file__).parent.parent / "logs"
+
+
+def _append_action_log(state: State, plan: ActionPlan) -> None:
+    _LOG_DIR.mkdir(exist_ok=True)
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "gmail_id": state.email.gmail_id,
+        "sender": state.email.sender,
+        "subject": state.email.subject,
+        "category": state.classification.category.value if state.classification else "unknown",
+        "confidence": round(state.classification.confidence, 2) if state.classification else 0.0,
+        "action": plan.notes,
+        "trust_phase": state.trust_phase.value,
+    }
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with (_LOG_DIR / f"{date_str}.jsonl").open("a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 UNSUBSCRIBE_MARKERS = ("unsubscribe", "manage preferences", "opt out", "opt-out")
 KNOWN_PERSONAL_DOMAINS = {"gmail.com", "icloud.com", "hotmail.com", "outlook.com"}
@@ -52,6 +75,7 @@ def _action(state: State, plan: ActionPlan) -> State:
         from agent.gmail_client import apply_action
 
         apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
+    _append_action_log(state, plan)
     return state.model_copy(
         update={
             "action": plan,

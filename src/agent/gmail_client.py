@@ -172,6 +172,21 @@ def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> 
     ).execute()
 
 
+def send_email(to: str, subject: str, body: str) -> None:
+    """Send a plain-text email from the authenticated account."""
+    from email.mime.text import MIMEText
+
+    message = MIMEText(body)
+    message["to"] = to
+    message["subject"] = subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    get_service().users().messages().send(
+        userId="me",
+        body={"raw": raw},
+    ).execute()
+    logger.info("[gmail] sent email to=%s subject=%r", to, subject)
+
+
 def register_watch(topic_name: str) -> dict:
     """Register Gmail push notifications for INBOX changes. Must be renewed every 7 days."""
     return (

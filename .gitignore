@@ -52,3 +52,6 @@ Thumbs.db
 credentials.json
 token.json
 last_history_id.txt
+
+# Action logs (runtime data)
+src/logs/
