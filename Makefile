@@ -2,7 +2,7 @@ NGROK_DOMAIN ?= mobilize-shrunk-endless.ngrok-free.dev
 LANGGRAPH_PORT ?= 2024
 DASHBOARD_PORT ?= 8765
 
-.PHONY: start start-docker ngrok format check check-fix renew-watch digest setup-crons dashboard backfill
+.PHONY: start start-docker ngrok format check check-fix renew-watch digest setup-crons dashboard backfill smoke
 
 help:
 	@echo "Available commands:"
@@ -14,6 +14,7 @@ help:
 	@echo "  setup-crons  - Register watch renewal + digest crons on the running server"
 	@echo "  renew-watch  - Run watch renewal once manually"
 	@echo "  digest       - Run digest once manually"
+	@echo "  smoke        - Run graph against fixture emails"
 	@echo "  format       - Format codebase"
 	@echo "  check        - Run linters and type checks"
 	@echo "  check-fix    - Run linters and type checks with auto-fix"
@@ -60,6 +61,12 @@ backfill:
 	cd src/agent && \
 	source .venv/bin/activate && \
 	uv run python -m agent.stats.backfill
+
+smoke:
+	cd src/agent && \
+	source .venv/bin/activate && \
+	set -a && source ../.env && set +a && \
+	uv run python -m agent.dev.smoke
 
 format:
 	cd src/agent && \
