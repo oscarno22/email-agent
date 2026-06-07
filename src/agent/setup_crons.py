@@ -31,6 +31,11 @@ _CRONS = [
 
 
 async def main() -> None:
+    if os.getenv("ENABLE_CRONS", "false").lower() != "true":
+        print("ENABLE_CRONS is not set to true — skipping cron registration.")
+        print("Set ENABLE_CRONS=true in src/.env and re-run to activate.")
+        return
+
     client = get_client(url=_URL)
 
     # Remove any previously registered managed crons so re-runs are idempotent.
