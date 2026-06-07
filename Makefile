@@ -16,7 +16,10 @@ start:
 	langgraph dev
 
 start-docker:
-	cd src && \
+	cd src/agent && \
+	uv sync && \
+	source .venv/bin/activate && \
+	cd .. && \
 	langgraph up
 
 format:
