@@ -11,7 +11,7 @@ from langgraph_sdk import get_client
 
 from agent.ingestion.gmail_client import check_credentials, fetch_email, list_history
 from agent.stats.dashboard import router as _dashboard_router
-from agent.stats.db import init_db
+from agent.stats.db import init_db, message_already_processed
 from agent.stats.events import attach_loop
 
 logging.getLogger("agent").setLevel(logging.DEBUG)
@@ -106,6 +106,13 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
                 email_obj.sender,
                 email_obj.subject,
             )
+            if await asyncio.to_thread(message_already_processed, email_obj.gmail_id):
+                logger.info(
+                    "[webhook] skipping %s — already processed (gmail_id=%s)",
+                    message_id,
+                    email_obj.gmail_id,
+                )
+                continue
             thread = await client.threads.create(
                 thread_id=_gmail_thread_uuid(email_obj.thread_id),
                 if_exists="do_nothing",

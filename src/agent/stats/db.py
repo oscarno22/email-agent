@@ -190,6 +190,15 @@ def get_events_for_date(date: str) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def message_already_processed(gmail_id: str) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM email_events WHERE gmail_id = ? LIMIT 1",
+            (gmail_id,),
+        ).fetchone()
+        return row is not None
+
+
 def get_recent_events(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
