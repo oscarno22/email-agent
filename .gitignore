@@ -53,6 +53,9 @@ credentials.json
 token.json
 last_history_id.txt
 
+# Deployment secrets (filled from secrets-template.json — never commit)
+cloudformation/secrets.json
+
 # Action logs (runtime data)
 src/logs/
 

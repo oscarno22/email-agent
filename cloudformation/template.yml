@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Email Agent - ECS Fargate (LangGraph + Postgres + Redis + ngrok), EFS
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  EcrImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI for the LangGraph server, e.g.
+      176331939239.dkr.ecr.us-east-1.amazonaws.com/email-agent:abc1234.
+      Updated on every deploy by GitHub Actions.
+    Default: "176331939239.dkr.ecr.us-east-1.amazonaws.com/email-agent:latest"
+
+  SecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret (created with `make secrets-create`).
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0147c662e76c27380
+
+  Subnet1:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0242b74cd32033c2b
+
+  Subnet2:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0c1519564b3bdefea
+
+  NgrokStaticDomain:
+    Type: String
+    Default: mobilize-shrunk-endless.ngrok-free.dev
+
+  TrustPhase:
+    Type: String
+    Default: shadow
+    AllowedValues: [shadow, label, archive, draft]
+
+  DigestToEmail:
+    Type: String
+    Default: ""
+
+  EnableCrons:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ── ECS Cluster ──────────────────────────────────────────────────────────
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: email-agent
+
+  # ── CloudWatch Logs ──────────────────────────────────────────────────────
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/email-agent
+      RetentionInDays: 30
+
+  # ── Security Groups ──────────────────────────────────────────────────────
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Email Agent ECS task - outbound only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Email Agent EFS - allow NFS from ECS task
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+
+  # ── EFS ──────────────────────────────────────────────────────────────────
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+
+  EFSMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref Subnet1
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  EFSMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref Subnet2
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  # Access point for Postgres data — runs as uid 999 (postgres user in postgres:16)
+  EFSAccessPointPostgres:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      PosixUser:
+        Uid: "999"
+        Gid: "999"
+      RootDirectory:
+        Path: /postgres
+        CreationInfo:
+          OwnerUid: "999"
+          OwnerGid: "999"
+          Permissions: "0700"
+
+  # Access point for SQLite stats.db — world-writable so any container uid can write
+  EFSAccessPointStats:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      PosixUser:
+        Uid: "0"
+        Gid: "0"
+      RootDirectory:
+        Path: /stats
+        CreationInfo:
+          OwnerUid: "0"
+          OwnerGid: "0"
+          Permissions: "0777"
+
+  # ── IAM ──────────────────────────────────────────────────────────────────
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: email-agent-task-execution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadAgentSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref SecretArn
+
+  # ── ECS Task Definition ──────────────────────────────────────────────────
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: email-agent
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: "1024"    # 1 vCPU — shared across all 4 containers
+      Memory: "2048" # 2 GB
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      Volumes:
+        - Name: postgres-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref EFSFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref EFSAccessPointPostgres
+              IAM: DISABLED
+        - Name: stats-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref EFSFileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref EFSAccessPointStats
+              IAM: DISABLED
+      ContainerDefinitions:
+
+        # ── postgres:16 ────────────────────────────────────────────────────
+        - Name: postgres
+          Image: postgres:16
+          Essential: false
+          Memory: 512
+          Environment:
+            - Name: POSTGRES_DB
+              Value: langgraph
+            - Name: POSTGRES_USER
+              Value: postgres
+            # Use a subdirectory so EFS root metadata doesn't confuse Postgres init
+            - Name: PGDATA
+              Value: /var/lib/postgresql/data/pgdata
+          Secrets:
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub "${SecretArn}:POSTGRES_PASSWORD::"
+          MountPoints:
+            - SourceVolume: postgres-data
+              ContainerPath: /var/lib/postgresql/data
+          HealthCheck:
+            Command: ["CMD-SHELL", "pg_isready -U postgres"]
+            Interval: 5
+            Timeout: 5
+            Retries: 10
+            StartPeriod: 30
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/email-agent
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: postgres
+
+        # ── redis:7-alpine ─────────────────────────────────────────────────
+        - Name: redis
+          Image: redis:7-alpine
+          Essential: false
+          Memory: 128
+          HealthCheck:
+            Command: ["CMD", "redis-cli", "ping"]
+            Interval: 5
+            Timeout: 3
+            Retries: 10
+            StartPeriod: 10
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/email-agent
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: redis
+
+        # ── LangGraph server (ECR image) ───────────────────────────────────
+        - Name: langgraph
+          Image: !Ref EcrImageUri
+          Essential: true
+          Memory: 1152
+          DependsOn:
+            - ContainerName: postgres
+              Condition: HEALTHY
+            - ContainerName: redis
+              Condition: HEALTHY
+          Environment:
+            - Name: REDIS_URI
+              Value: redis://localhost:6379
+            - Name: TRUST_PHASE
+              Value: !Ref TrustPhase
+            - Name: DIGEST_TO_EMAIL
+              Value: !Ref DigestToEmail
+            - Name: ENABLE_CRONS
+              Value: !Ref EnableCrons
+            - Name: STATS_DB_PATH
+              Value: /data/stats.db
+            - Name: LANGGRAPH_URL
+              Value: http://localhost:2024
+          Secrets:
+            - Name: ANTHROPIC_API_KEY
+              ValueFrom: !Sub "${SecretArn}:ANTHROPIC_API_KEY::"
+            - Name: GMAIL_CLIENT_ID
+              ValueFrom: !Sub "${SecretArn}:GMAIL_CLIENT_ID::"
+            - Name: GMAIL_CLIENT_SECRET
+              ValueFrom: !Sub "${SecretArn}:GMAIL_CLIENT_SECRET::"
+            - Name: GMAIL_REFRESH_TOKEN
+              ValueFrom: !Sub "${SecretArn}:GMAIL_REFRESH_TOKEN::"
+            - Name: PUBSUB_TOPIC_NAME
+              ValueFrom: !Sub "${SecretArn}:PUBSUB_TOPIC_NAME::"
+            - Name: PUBSUB_VERIFICATION_TOKEN
+              ValueFrom: !Sub "${SecretArn}:PUBSUB_VERIFICATION_TOKEN::"
+            - Name: DATABASE_URI
+              ValueFrom: !Sub "${SecretArn}:DATABASE_URI::"
+          MountPoints:
+            - SourceVolume: stats-data
+              ContainerPath: /data
+          PortMappings:
+            - ContainerPort: 2024
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/email-agent
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: langgraph
+
+        # ── ngrok agent ────────────────────────────────────────────────────
+        - Name: ngrok
+          Image: ngrok/ngrok:latest
+          Essential: false
+          Memory: 128
+          DependsOn:
+            - ContainerName: langgraph
+              Condition: START
+          Command:
+            - http
+            - "2024"
+            - !Sub "--url=${NgrokStaticDomain}"
+          Secrets:
+            - Name: NGROK_AUTHTOKEN
+              ValueFrom: !Sub "${SecretArn}:NGROK_AUTHTOKEN::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/email-agent
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ngrok
+
+  # ── ECS Service ──────────────────────────────────────────────────────────
+  ECSService:
+    Type: AWS::ECS::Service
+    # EFS mount targets must exist before ECS tries to mount EFS
+    DependsOn:
+      - EFSMountTarget1
+      - EFSMountTarget2
+    Properties:
+      ServiceName: email-agent
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      # Stop old task before starting new one — avoids two tasks writing to SQLite concurrently
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # Public IP required for ECR pull + external API calls (no NAT gateway needed)
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          Subnets:
+            - !Ref Subnet1
+            - !Ref Subnet2
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ECSClusterName:
+    Value: !Ref ECSCluster
+
+  ECSServiceName:
+    Value: !GetAtt ECSService.Name
+
+  LogGroupName:
+    Value: !Ref LogGroup
+    Description: "Tail with: aws logs tail /ecs/email-agent --follow"

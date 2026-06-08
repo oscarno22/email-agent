@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  One-time bootstrap — GitHub Actions IAM role for email-agent.
+  Reuses the existing account-level OIDC provider (one per account — shared across repos).
+  Run once with: make deploy-bootstrap
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: oscarno22
+
+  GitHubRepo:
+    Type: String
+    Default: email-agent
+
+Resources:
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: email-agent-github-actions
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              # References the existing account-level OIDC provider by its standard ARN
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  !Sub "repo:${GitHubOrg}/${GitHubRepo}:*"
+      Policies:
+        - PolicyName: DeployEmailAgent
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ECR auth (account-level, no resource restriction possible)
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              # ECR image operations — scoped to the email-agent repo
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource:
+                  !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/email-agent"
+              # ECS task definition lifecycle
+              - Effect: Allow
+                Action:
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                Resource: "*"
+              # ECS service update — scoped to the email-agent service
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource:
+                  !Sub "arn:aws:ecs:*:${AWS::AccountId}:service/email-agent/email-agent"
+              # Required so ECS can assume the task execution role on deployment
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  !Sub "arn:aws:iam::${AWS::AccountId}:role/email-agent-task-execution"
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt GitHubActionsRole.Arn
+    Description: >
+      Add this value as AWS_ROLE_ARN in your GitHub repository secrets
+      (Settings → Secrets and variables → Actions → New repository secret).
