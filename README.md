@@ -132,7 +132,7 @@ src/
   langgraph.json         # LangGraph CLI config (graphs + http app + env)
   .env                   # ANTHROPIC_API_KEY, TRUST_PHASE, PUBSUB_VERIFICATION_TOKEN, ENABLE_CRONS
   stats.db               # SQLite stats DB (gitignored)
-  last_history_id.txt    # Gmail history cursor (gitignored)
+  # Gmail history cursor stored in LangGraph store (InMemoryStore in dev, Postgres in prod)
   logs/YYYY-MM-DD.jsonl  # daily append-only action logs (digest input)
   agent/
     pyproject.toml       # uv project root

@@ -8,9 +8,12 @@ Safe to re-run — existing crons with the same metadata tag are deleted first.
 """
 
 import asyncio
+import logging
 import os
 
 from langgraph_sdk import get_client
+
+logger = logging.getLogger(__name__)
 
 _URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
 
@@ -32,8 +35,10 @@ _CRONS = [
 
 async def main() -> None:
     if os.getenv("ENABLE_CRONS", "false").lower() != "true":
-        print("ENABLE_CRONS is not set to true — skipping cron registration.")
-        print("Set ENABLE_CRONS=true in src/.env and re-run to activate.")
+        logger.info(
+            "[setup_crons] ENABLE_CRONS is not true — skipping. "
+            "Set ENABLE_CRONS=true in src/.env and re-run."
+        )
         return
 
     client = get_client(url=_URL)
@@ -43,7 +48,11 @@ async def main() -> None:
     for cron in existing:
         if cron.get("metadata", {}).get("managed_by") == "setup_crons":
             await client.crons.delete(cron["cron_id"])
-            print(f"  deleted existing cron {cron['cron_id']} ({cron['metadata']['name']})")
+            logger.info(
+                "[setup_crons] deleted existing cron %s (%s)",
+                cron["cron_id"],
+                cron["metadata"]["name"],
+            )
 
     for spec in _CRONS:
         cron = await client.crons.create(
@@ -53,9 +62,14 @@ async def main() -> None:
             metadata=spec["metadata"],
         )
         name = spec["metadata"]["name"]
-        print(f"  created {name} — cron_id={cron['cron_id']}  schedule={spec['schedule']}")
+        logger.info(
+            "[setup_crons] created %s — cron_id=%s schedule=%s",
+            name,
+            cron["cron_id"],
+            spec["schedule"],
+        )
 
-    print("\nDone. Crons are active while the server is running.")
+    logger.info("[setup_crons] done — crons are active while the server is running")
 
 
 if __name__ == "__main__":

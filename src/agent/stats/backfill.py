@@ -7,10 +7,13 @@ Idempotent: the (ts, gmail_id) UNIQUE index makes re-runs no-ops.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 
 from agent.stats.db import init_db, record_event
+
+logger = logging.getLogger(__name__)
 
 _LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 
@@ -24,7 +27,7 @@ def _domain_from_sender(sender: str) -> str:
 def main() -> int:
     init_db()
     if not _LOG_DIR.exists():
-        print(f"no log directory at {_LOG_DIR}")
+        logger.info("[backfill] no log directory at %s — nothing to do", _LOG_DIR)
         return 0
 
     files = sorted(_LOG_DIR.glob("*.jsonl"))
@@ -57,9 +60,9 @@ def main() -> int:
                     draft_created=bool(entry.get("draft_created", False)),
                 )
                 inserted += 1
-        print(f"processed {path.name}")
+        logger.info("[backfill] processed %s", path.name)
 
-    print(f"done — {inserted} rows attempted, {skipped} malformed lines")
+    logger.info("[backfill] done — %d rows attempted, %d malformed lines", inserted, skipped)
     return 0
 
 

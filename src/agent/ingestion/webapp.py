@@ -5,7 +5,6 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from langgraph_sdk import get_client
@@ -33,10 +32,11 @@ _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
 _LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
 _TRUST_PHASE = os.getenv("TRUST_PHASE", "label")
 
-# Persists the last-seen historyId across requests so history.list always gets
-# the right startHistoryId (the notification's historyId is the NEW state, not the start).
-_HISTORY_ID_FILE = Path(__file__).parent.parent.parent / "last_history_id.txt"
 _GMAIL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # UUID URL namespace
+# Namespace + key used to persist the Gmail history cursor in the LangGraph store.
+# In dev (langgraph dev) this lives in InMemoryStore; in production it's Postgres-backed.
+_STORE_NS = ("webhook",)
+_HISTORY_ID_KEY = "last_history_id"
 
 
 def _gmail_thread_uuid(gmail_thread_id: str) -> str:
@@ -44,14 +44,9 @@ def _gmail_thread_uuid(gmail_thread_id: str) -> str:
     return str(uuid.uuid5(_GMAIL_NS, gmail_thread_id))
 
 
-def _read_history_id() -> str | None:
-    if _HISTORY_ID_FILE.exists():
-        return _HISTORY_ID_FILE.read_text().strip() or None
-    return None
-
-
-def _write_history_id(history_id: str) -> None:
-    _HISTORY_ID_FILE.write_text(history_id)
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/webhook/pubsub")
@@ -69,7 +64,16 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
         logger.error("[webhook] malformed pub/sub message: %s", exc)
         return Response(status_code=400)
 
-    start_id = _read_history_id() or str(int(history_id) - 1)
+    client = get_client(url=_LANGGRAPH_URL)
+
+    try:
+        item = await client.store.get_item(_STORE_NS, _HISTORY_ID_KEY)
+        last_id = item["value"].get("id") if item else None
+    except Exception as exc:
+        logger.warning("[webhook] could not read last_history_id from store: %s", exc)
+        last_id = None
+
+    start_id = last_id or str(int(history_id) - 1)
     logger.info(
         "[webhook] pub/sub received historyId=%s — querying from startHistoryId=%s",
         history_id,
@@ -82,15 +86,16 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
         logger.error("[webhook] history.list failed: %s", exc)
         return Response(status_code=200)
 
-    _write_history_id(history_id)
+    try:
+        await client.store.put_item(_STORE_NS, _HISTORY_ID_KEY, {"id": history_id})
+    except Exception as exc:
+        logger.warning("[webhook] could not persist last_history_id to store: %s", exc)
 
     if not message_ids:
         logger.info("[webhook] no new INBOX messages found")
         return Response(status_code=200)
 
     logger.info("[webhook] found %d new message(s): %s", len(message_ids), message_ids)
-
-    client = get_client(url=_LANGGRAPH_URL)
 
     for message_id in message_ids:
         try:
