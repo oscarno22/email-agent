@@ -4,17 +4,30 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from langgraph_sdk import get_client
 
 from agent.ingestion.gmail_client import fetch_email, list_history
+from agent.stats.dashboard import router as _dashboard_router
+from agent.stats.db import init_db
+from agent.stats.events import attach_loop
 
 logging.getLogger("agent").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    await asyncio.to_thread(init_db)
+    attach_loop(asyncio.get_running_loop())
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
+app.include_router(_dashboard_router)
 
 _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
 _LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")

@@ -1,14 +1,15 @@
-"""Localhost stats dashboard for the email agent.
+"""Stats dashboard routes for the email agent.
 
-Reads from the SQLite stats DB (db.py) and streams live `email_processed`
-events from the in-process events bus (events.py). When the agent graph
-runs inside the same `langgraph dev` process, the dashboard can be mounted
-alongside it and will get cards in real time. When run as a standalone
-uvicorn (the `make dashboard` target), the live feed only fires while the
-two processes share memory — typical setup runs the dashboard in the same
-process as webapp.py.
+Routes are exposed via `router` (an APIRouter) so they can be included in
+webapp.py — giving them access to the same in-process event bus as the
+ingestion webhook and therefore a working SSE live feed.
 
-Run standalone: uv run uvicorn agent.dashboard:app --port 8765
+Standalone mode (``make dashboard``): the module also exports a top-level
+``app`` FastAPI instance that mounts the same router. It runs on :8765 and
+only has historical data (no live SSE) because it's a separate process.
+
+Merged mode (``make start``): webapp.py includes this router, so the
+dashboard is available at :2024 with full real-time SSE.
 """
 
 from __future__ import annotations
@@ -18,11 +19,12 @@ import json
 import logging
 import os
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import APIRouter, BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from agent.core.state import TrustPhase
-from agent.ingestion.batch_review import _status as _batch_status, run_batch_review
+from agent.ingestion.batch_review import _status as _batch_status
+from agent.ingestion.batch_review import run_batch_review
 from agent.stats.db import (
     get_category_breakdown,
     get_daily_counts,
@@ -37,33 +39,34 @@ _LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Email Agent — Stats")
+router = APIRouter()
 
 
-@app.on_event("startup")
-async def _startup() -> None:
-    init_db()
-    attach_loop(asyncio.get_running_loop())
-
-
-@app.get("/api/stats")
+@router.get("/api/stats")
 async def api_stats() -> JSONResponse:
+    totals, by_category, daily, top_senders = await asyncio.gather(
+        asyncio.to_thread(get_totals),
+        asyncio.to_thread(get_category_breakdown),
+        asyncio.to_thread(get_daily_counts),
+        asyncio.to_thread(get_top_senders),
+    )
     return JSONResponse(
         {
-            "totals": get_totals(),
-            "by_category": get_category_breakdown(),
-            "daily": get_daily_counts(),
-            "top_senders": get_top_senders(),
+            "totals": totals,
+            "by_category": by_category,
+            "daily": daily,
+            "top_senders": top_senders,
         }
     )
 
 
-@app.get("/api/events")
+@router.get("/api/events")
 async def api_events(limit: int = 50) -> JSONResponse:
-    return JSONResponse({"events": get_recent_events(limit=limit)})
+    events = await asyncio.to_thread(get_recent_events, limit)
+    return JSONResponse({"events": events})
 
 
-@app.get("/api/stream")
+@router.get("/api/stream")
 async def api_stream() -> StreamingResponse:
     async def gen():
         # Heartbeat so proxies don't reap the connection.
@@ -74,7 +77,7 @@ async def api_stream() -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-@app.post("/api/batch-review")
+@router.post("/api/batch-review")
 async def api_batch_review(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     body = await request.json()
     trust_phase_str = str(body.get("trust_phase", "label")).lower()
@@ -87,7 +90,11 @@ async def api_batch_review(request: Request, background_tasks: BackgroundTasks) 
 
     if _batch_status.running:
         return JSONResponse(
-            {"status": "running", "processed": _batch_status.processed, "total": _batch_status.total},
+            {
+                "status": "running",
+                "processed": _batch_status.processed,
+                "total": _batch_status.total,
+            },
             status_code=409,
         )
 
@@ -95,16 +102,18 @@ async def api_batch_review(request: Request, background_tasks: BackgroundTasks) 
     return JSONResponse({"status": "started"}, status_code=202)
 
 
-@app.get("/api/batch-review/status")
+@router.get("/api/batch-review/status")
 async def api_batch_review_status() -> JSONResponse:
-    return JSONResponse({
-        "running": _batch_status.running,
-        "total": _batch_status.total,
-        "processed": _batch_status.processed,
-        "failed": _batch_status.failed,
-        "last_run_ts": _batch_status.last_run_ts,
-        "last_run_summary": _batch_status.last_run_summary,
-    })
+    return JSONResponse(
+        {
+            "running": _batch_status.running,
+            "total": _batch_status.total,
+            "processed": _batch_status.processed,
+            "failed": _batch_status.failed,
+            "last_run_ts": _batch_status.last_run_ts,
+            "last_run_summary": _batch_status.last_run_summary,
+        }
+    )
 
 
 _INDEX_HTML = """<!doctype html>
@@ -473,6 +482,24 @@ setInterval(refresh, 30000);
 """
 
 
-@app.get("/")
+@router.get("/")
 async def index() -> HTMLResponse:
     return HTMLResponse(_INDEX_HTML)
+
+
+# ---------------------------------------------------------------------------
+# Standalone mode — `make dashboard` / `uv run uvicorn agent.stats.dashboard:app --port 8765`
+# In this mode the live SSE feed is inactive (separate process from ingestion).
+# For real-time cards, use the dashboard at http://localhost:2024 when `make start` is running.
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="Email Agent — Stats")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    await asyncio.to_thread(init_db)
+    attach_loop(asyncio.get_running_loop())
+
+
+app.include_router(router)

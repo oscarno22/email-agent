@@ -1,4 +1,5 @@
 """Batch review: fetch unread inbox messages and run each through the triage agent."""
+
 from __future__ import annotations
 
 import asyncio
@@ -57,7 +58,9 @@ async def run_batch_review(
         await publish({"type": "batch_start", "props": {"total": _status.total}})
         logger.info(
             "[batch] starting: %d unread messages, trust_phase=%s, mark_read=%s",
-            _status.total, trust_phase.value, mark_read,
+            _status.total,
+            trust_phase.value,
+            mark_read,
         )
 
         client = get_client(url=langgraph_url)
@@ -82,31 +85,37 @@ async def run_batch_review(
                 _status.processed += 1
                 logger.debug(
                     "[batch] %d/%d — %s %r",
-                    _status.processed, _status.total, email_obj.sender, email_obj.subject,
+                    _status.processed,
+                    _status.total,
+                    email_obj.sender,
+                    email_obj.subject,
                 )
             except Exception:
                 logger.exception("[batch] failed to process message %s", msg_id)
                 _status.failed += 1
 
-            await publish({
-                "type": "batch_progress",
-                "props": {"processed": _status.processed, "total": _status.total},
-            })
+            await publish(
+                {
+                    "type": "batch_progress",
+                    "props": {"processed": _status.processed, "total": _status.total},
+                }
+            )
 
         _status.running = False
         _status.last_run_ts = datetime.now(tz=UTC).isoformat()
-        _status.last_run_summary = (
-            f"Processed {_status.processed}/{_status.total}"
-            + (f", {_status.failed} failed" if _status.failed else "")
+        _status.last_run_summary = f"Processed {_status.processed}/{_status.total}" + (
+            f", {_status.failed} failed" if _status.failed else ""
         )
-        await publish({
-            "type": "batch_complete",
-            "props": {
-                "processed": _status.processed,
-                "total": _status.total,
-                "failed": _status.failed,
-            },
-        })
+        await publish(
+            {
+                "type": "batch_complete",
+                "props": {
+                    "processed": _status.processed,
+                    "total": _status.total,
+                    "failed": _status.failed,
+                },
+            }
+        )
         logger.info("[batch] complete — %s", _status.last_run_summary)
     except Exception:
         _status.running = False

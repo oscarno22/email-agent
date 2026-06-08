@@ -9,7 +9,7 @@ help:
 	@echo "  start        - Start agent server in local dev (langgraph dev)"
 	@echo "  start-docker - Start agent server in Docker (langgraph up, requires license)"
 	@echo "  ngrok        - Start ngrok tunnel (NGROK_DOMAIN=$(NGROK_DOMAIN))"
-	@echo "  dashboard    - Start stats dashboard on http://localhost:$(DASHBOARD_PORT)"
+	@echo "  dashboard    - Start standalone stats dashboard on http://localhost:$(DASHBOARD_PORT) (historical data only)"
 	@echo "  backfill     - Backfill JSONL action logs into SQLite stats DB"
 	@echo "  setup-crons  - Register watch renewal + digest crons on the running server"
 	@echo "  renew-watch  - Run watch renewal once manually"

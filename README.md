@@ -7,7 +7,8 @@ label / archive / draft action.
 **Status:** personal-only v1, **live in draft phase**. Real emails come in via
 Gmail Push → Pub/Sub → webhook, get classified, labeled, and (for personal/work)
 have a reply draft generated. Stats are persisted to SQLite and visible on a
-localhost dashboard.
+real-time dashboard at `http://localhost:2024/` (served by the same process as
+the webhook, so the SSE live feed works).
 
 ## Why
 
@@ -42,6 +43,10 @@ START → extract_features → classify → [route by category] → action_<cate
 - **Generative UI** — action nodes call `push_ui_message("email_card", …)` so
   cards flow through the LangGraph stream / state, and the same payload is
   fanned out over SSE to the dashboard's live feed.
+- **Batch review** — `POST /api/batch-review` fetches all unread inbox messages
+  and runs each through the triage agent. Progress streams over SSE; the
+  dashboard has a control panel with trust-phase selector, mark-read toggle,
+  and max-emails input.
 
 The classifier prompt is steered by a user-editable rules list in
 [`core/rules.py`](src/agent/core/rules.py) — this is the chosen "learning"
@@ -77,12 +82,9 @@ cp src/.env.example src/.env
 # 2. Run the graph in LangGraph Studio
 make start
 # Studio opens; paste an email JSON into the input to invoke the graph.
+# Dashboard with live SSE feed is at http://localhost:2024/
 
-# 3. (Separate terminal) start the stats dashboard
-make dashboard
-# Open http://localhost:8765
-
-# 4. Smoke-test against built-in fixtures
+# 3. Smoke-test against built-in fixtures
 cd src/agent && uv run python -m agent.dev.smoke
 ```
 
@@ -103,24 +105,25 @@ make check-fix     # ruff check --fix
 
 ### Processes at a glance
 
-The full application is three concurrent processes:
+The full application is two concurrent processes:
 
 | Process | Command | What it does |
 |---|---|---|
-| LangGraph server | `make start` | Runs the graph + webhook receiver on `:2024`. This is the only required process — it handles both email classification and the Pub/Sub webhook. |
+| LangGraph server | `make start` | Runs the graph, webhook, and dashboard on `:2024`. The only required process. |
 | ngrok tunnel | `make ngrok` | Forwards GCP Pub/Sub push notifications to `localhost:2024`. Required for live ingestion; not needed when testing with fixtures. |
-| Dashboard | `make dashboard` | Standalone stats UI on `:8765`. Shows historical data; for real-time SSE cards, merge `stats.dashboard:app` routes into `ingestion.webapp` so they share a process. |
+
+`make dashboard` starts a standalone stats UI on `:8765` for browsing historical data without `make start` — but the SSE live feed is inactive in that mode (separate process).
 
 Scheduled tasks (`digest`, `renew_watch`) run inside the LangGraph server as registered crons — not as separate processes. They're registered once with `make setup-crons`.
 
 ### Dev setup (live ingestion)
 
-1. **Terminal 1:** `make start` — LangGraph server on `:2024`
+1. **Terminal 1:** `make start` — LangGraph server + dashboard on `:2024`
 2. **Terminal 2:** `ngrok http --url=<your-domain> 2024` (or `make ngrok`)
-3. **Terminal 3:** `make dashboard` — stats UI on `:8765`
-4. `src/.env` needs at minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE=draft`
-5. `src/credentials.json` + `src/token.json` (Gmail OAuth, gitignored)
-6. Gmail watch must be active — `make renew-watch` if it's stale (expires every 7 days)
+3. `src/.env` needs at minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE=draft`
+4. `src/credentials.json` + `src/token.json` (Gmail OAuth, gitignored)
+5. Gmail watch must be active — `make renew-watch` if it's stale (expires every 7 days)
+6. Open `http://localhost:2024/` for the live dashboard
 
 ## Project layout
 
@@ -144,7 +147,8 @@ src/
 
     ingestion/           # Email delivery: Gmail push → webhook → graph run
       gmail_client.py    # OAuth2 + Gmail API (history, fetch, modify, watch, drafts, send)
-      webapp.py          # POST /webhook/pubsub — turns Pub/Sub messages into graph runs
+      webapp.py          # POST /webhook/pubsub + dashboard routes (merged for in-process SSE)
+      batch_review.py    # Bulk inbox review — fetches unread messages and runs each through the agent
 
     crons/               # Scheduled tasks (run inside the LangGraph server)
       digest.py          # Daily summary email from yesterday's JSONL
@@ -157,7 +161,7 @@ src/
       db.py              # SQLite stats sink (portable schema, Postgres-ready)
       backfill.py        # One-off JSONL → SQLite import
       events.py          # In-process pub/sub bus that powers the dashboard SSE
-      dashboard.py       # FastAPI dashboard: stats, recent events, live card feed
+      dashboard.py       # APIRouter with all dashboard routes; standalone app for make dashboard
 
     dev/                 # Developer tooling (not used in production)
       fixtures.py        # Sample emails for smoke testing
@@ -169,27 +173,28 @@ src/
 - **`db.py`** — single `email_events` table; portable SQL (`?` params, ISO-8601
   text timestamps) so the AWS migration to Postgres is roughly a connect-call
   swap plus `AUTOINCREMENT` → `SERIAL`. Override path with `STATS_DB_PATH`.
-- **`dashboard.py`** — inline HTML + Chart.js from CDN. Endpoints:
-  - `GET /` — page
+- **`dashboard.py`** — inline HTML + Chart.js from CDN. Routes exposed via
+  `APIRouter` and included in `webapp.py`, so they run in the same process as
+  the ingestion webhook. Endpoints:
+  - `GET /` — page (at `http://localhost:2024/` when `make start` is running)
   - `GET /api/stats` — totals, category breakdown, daily counts, top senders
   - `GET /api/events?limit=N` — recent events
-  - `GET /api/stream` — SSE feed of `email_processed` events
-- **Live feed caveat:** the SSE bus is in-process. Standalone `make dashboard`
-  shows historical data + manual refreshes; for real-time cards while the
-  agent processes mail, merge `dashboard.app` into `webapp.py` so both share a
-  process.
+  - `GET /api/stream` — SSE feed of live `email_processed` and batch-progress events
+  - `POST /api/batch-review` — start a bulk inbox run
+  - `GET /api/batch-review/status` — poll batch run state
+- **SSE live feed** works because `dashboard.py` and `webapp.py` share a process
+  (same in-memory `events.py` bus). `make dashboard` (`:8765`) is a standalone
+  fallback that only has historical data.
 
 ## Roadmap
 
 In rough priority order:
 
-1. **Real-time dashboard** — merge `dashboard.app` routes into `webapp.py` so
-   the SSE bus actually fans out during live ingestion.
-2. **Classifier tuning** — iterate `rules.py` based on real-mail
+1. **Classifier tuning** — iterate `rules.py` based on real-mail
    misclassifications; watch for over-escalation to Sonnet.
-3. **AWS deployment** — ECS/Fargate, ALB replacing ngrok, Secrets Manager for
+2. **AWS deployment** — ECS/Fargate, ALB replacing ngrok, Secrets Manager for
    Gmail credentials, swap SQLite → RDS Postgres (the schema is already portable).
-4. **Approval surface for drafts** — Slack / web UI / Gmail drafts (Gmail drafts
+3. **Approval surface for drafts** — Slack / web UI / Gmail drafts (Gmail drafts
    is the current default; revisit when multi-tenant).
 
 ## License
