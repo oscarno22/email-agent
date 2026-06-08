@@ -34,7 +34,7 @@ No test suite yet — `pytest` is in dev deps but unused.
 
 - The `uv` project root is **`src/agent/`** (its own `pyproject.toml`, `.venv`, `uv.lock`). Run `uv` commands from there, not the repo root.
 - `langgraph dev` must run from **`src/`** (where `langgraph.json` lives). `make start` handles this.
-- `.env` lives at **`src/.env`** (loaded by `langgraph.json`), not the repo root. See `src/.env.example` for all required vars. At minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE`, and either the `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN` trio or a local `src/token.json`. The server raises at startup if no Gmail credentials are found.
+- `.env` lives at **`src/.env`** (loaded by `langgraph.json`), not the repo root. See `src/.env.example` for all required vars. At minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE`, and `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN`. The server raises at startup if no Gmail credentials are found. `src/token.json` and `src/credentials.json` are deleted — env vars are now required everywhere.
 - `LANGSMITH_*` keys are optional tracing.
 - Python is pinned to `>=3.12, <3.13`.
 
@@ -87,6 +87,36 @@ The stats dashboard is served by `webapp.py` (the LangGraph `http.app`) — avai
 `webapp.py` lifespan (in order): `check_credentials()` → `init_db()` → `attach_loop()`. If no Gmail credentials are found (neither env vars nor `token.json`), the server raises immediately rather than accepting requests that will fail.
 
 The `/health` endpoint (`GET /health`) returns `{"status": "ok"}` — used for load balancer health checks.
+
+## AWS Deployment
+
+Infrastructure lives in `cloudformation/`. All deployment targets are in the Makefile.
+
+**First-time order (run once):**
+```bash
+make deploy-bootstrap  # creates GitHub Actions IAM role (OIDC — no long-lived keys)
+# fill in cloudformation/secrets.json, then:
+make secrets-create    # creates Secrets Manager secret
+make build && make push  # MUST happen before deploy-infra (avoids CloudFormation hang)
+make deploy-infra      # deploys CloudFormation stack (ECS, EFS, IAM, SGs)
+```
+
+**After that:** every push to `main` triggers GitHub Actions → `langgraph build` → ECR push → ECS task definition update.
+
+**Key infra decisions:**
+- No ALB — ngrok agent runs as a sidecar container, keeps the existing static domain (`mobilize-shrunk-endless.ngrok-free.dev`). No custom domain or ACM cert needed.
+- Postgres + Redis run as sidecar containers in the same Fargate task (not managed services). Acceptable for single-instance personal use.
+- EFS mounts for SQLite stats persistence only (`STATS_DB_PATH=/data/stats.db`).
+- ECR repo is created by `make deploy-infra` as a pre-step (not in CloudFormation) to avoid early-validation circular dependency.
+- LangGraph Platform license required for the production server (`langgraph build` image). When obtained: add key to `cloudformation/secrets.json`, `make secrets-create`, add env var to langgraph container in `template.yml`, `make deploy-infra`.
+
+**Updating secrets:**
+```bash
+# edit cloudformation/secrets.json, then:
+make secrets-create
+# force re-deploy to pick up new values:
+aws ecs update-service --cluster email-agent --service email-agent --force-new-deployment --region us-east-1
+```
 
 ### LangGraph dev gotchas
 

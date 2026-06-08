@@ -26,7 +26,7 @@ Gmail Push → Pub/Sub → POST /webhook/pubsub
 START → extract_features → classify → [route by category] → action_<category> → END
                                                                   │
                                                                   ├─► Gmail API (label / archive / draft)
-                                                                  ├─► JSONL log + SQLite stats
+                                                                  ├─► SQLite stats
                                                                   └─► push_ui_message → SSE → dashboard
 ```
 
@@ -38,8 +38,7 @@ START → extract_features → classify → [route by category] → action_<cate
   subgraphs.
 - **Action nodes** — build an `ActionPlan` (labels, archive, optional draft).
   Trust-phase-gated; see below.
-- **Stats sink** — every processed email is appended to a daily JSONL log *and*
-  inserted into `src/stats.db` (SQLite). The dashboard reads from SQLite.
+- **Stats sink** — every processed email is inserted into `src/stats.db` (SQLite). The dashboard reads from SQLite.
 - **Generative UI** — action nodes call `push_ui_message("email_card", …)` so
   cards flow through the LangGraph stream / state, and the same payload is
   fanned out over SSE to the dashboard's live feed.
@@ -120,20 +119,23 @@ Scheduled tasks (`digest`, `renew_watch`) run inside the LangGraph server as reg
 
 1. **Terminal 1:** `make start` — LangGraph server + dashboard on `:2024`
 2. **Terminal 2:** `ngrok http --url=<your-domain> 2024` (or `make ngrok`)
-3. `src/.env` needs at minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE=draft`
-4. `src/credentials.json` + `src/token.json` (Gmail OAuth, gitignored)
-5. Gmail watch must be active — `make renew-watch` if it's stale (expires every 7 days)
+3. `src/.env` needs at minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE=draft`, and `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN`
+4. Gmail watch must be active — `make renew-watch` if it's stale (expires every 7 days)
 6. Open `http://localhost:2024/` for the live dashboard
 
 ## Project layout
 
 ```
+cloudformation/
+  template.yml           # ECS Fargate stack (LangGraph + Postgres + Redis + ngrok sidecars, EFS, IAM)
+  github-oidc.yml        # one-time GitHub Actions IAM role bootstrap
+  secrets-template.json  # fill in and run `make secrets-create`
+
 src/
   langgraph.json         # LangGraph CLI config (graphs + http app + env)
-  .env                   # ANTHROPIC_API_KEY, TRUST_PHASE, PUBSUB_VERIFICATION_TOKEN, ENABLE_CRONS
+  .env                   # ANTHROPIC_API_KEY, GMAIL_*, TRUST_PHASE, PUBSUB_*, ENABLE_CRONS
   stats.db               # SQLite stats DB (gitignored)
   # Gmail history cursor stored in LangGraph store (InMemoryStore in dev, Postgres in prod)
-  logs/YYYY-MM-DD.jsonl  # daily append-only action logs (digest input)
   agent/
     pyproject.toml       # uv project root
 
@@ -151,7 +153,7 @@ src/
       batch_review.py    # Bulk inbox review — fetches unread messages and runs each through the agent
 
     crons/               # Scheduled tasks (run inside the LangGraph server)
-      digest.py          # Daily summary email from yesterday's JSONL
+      digest.py          # Daily summary email from yesterday's SQLite events
       digest_graph.py    # LangGraph graph wrapper for the digest cron
       renew_watch.py     # Watch-renewal script (also runnable standalone)
       renew_watch_graph.py # LangGraph graph wrapper for the watch-renewal cron
@@ -186,15 +188,19 @@ src/
   (same in-memory `events.py` bus). `make dashboard` (`:8765`) is a standalone
   fallback that only has historical data.
 
+## Deployment
+
+Runs on AWS ECS Fargate. Infrastructure is CloudFormation; CI/CD is GitHub Actions (OIDC, no long-lived keys). See `cloudformation/` and `make help` for deployment targets.
+
+The ECS task runs four containers: LangGraph server, Postgres, Redis, and an ngrok agent (keeps the existing static domain, no ALB needed). EFS provides persistent storage for SQLite stats. All credentials live in AWS Secrets Manager.
+
 ## Roadmap
 
 In rough priority order:
 
 1. **Classifier tuning** — iterate `rules.py` based on real-mail
    misclassifications; watch for over-escalation to Sonnet.
-2. **AWS deployment** — ECS/Fargate, ALB replacing ngrok, Secrets Manager for
-   Gmail credentials, swap SQLite → RDS Postgres (the schema is already portable).
-3. **Approval surface for drafts** — Slack / web UI / Gmail drafts (Gmail drafts
+2. **Approval surface for drafts** — Slack / web UI / Gmail drafts (Gmail drafts
    is the current default; revisit when multi-tenant).
 
 ## License
