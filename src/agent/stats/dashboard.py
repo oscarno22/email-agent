@@ -26,11 +26,14 @@ from agent.core.state import TrustPhase
 from agent.ingestion.batch_review import _status as _batch_status
 from agent.ingestion.batch_review import run_batch_review
 from agent.stats.db import (
+    add_user_rule,
+    delete_user_rule,
     get_category_breakdown,
     get_daily_counts,
     get_recent_events,
     get_top_senders,
     get_totals,
+    get_user_rules,
     init_db,
 )
 from agent.stats.events import attach_loop, subscribe
@@ -100,6 +103,30 @@ async def api_batch_review(request: Request, background_tasks: BackgroundTasks) 
 
     background_tasks.add_task(run_batch_review, trust_phase, mark_read, max_emails, _LANGGRAPH_URL)
     return JSONResponse({"status": "started"}, status_code=202)
+
+
+@router.get("/api/rules")
+async def api_rules_list() -> JSONResponse:
+    rules = await asyncio.to_thread(get_user_rules)
+    return JSONResponse({"rules": rules})
+
+
+@router.post("/api/rules")
+async def api_rules_add(request: Request) -> JSONResponse:
+    body = await request.json()
+    rule = str(body.get("rule", "")).strip()
+    if not rule:
+        return JSONResponse({"error": "rule text required"}, status_code=400)
+    rule_id = await asyncio.to_thread(add_user_rule, rule)
+    return JSONResponse({"id": rule_id, "rule": rule}, status_code=201)
+
+
+@router.delete("/api/rules/{rule_id}")
+async def api_rules_delete(rule_id: int) -> JSONResponse:
+    deleted = await asyncio.to_thread(delete_user_rule, rule_id)
+    if not deleted:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"deleted": rule_id})
 
 
 @router.get("/api/batch-review/status")
@@ -200,6 +227,20 @@ _INDEX_HTML = """<!doctype html>
   .progress-wrap { background: var(--panel-2); border-radius: 4px; height: 6px; overflow: hidden; margin-top: 16px; }
   .progress-bar { height: 100%; background: var(--accent); transition: width .3s ease; border-radius: 4px; }
   .batch-status-text { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .rules-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-height: 24px; }
+  .rule-row { display: flex; align-items: center; gap: 8px; background: var(--panel-2); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+  .rule-text { flex: 1; }
+  .del-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }
+  .del-btn:hover { color: #d35d6e; }
+  .rule-add { display: flex; gap: 8px; margin-top: 4px; }
+  .rule-input { flex: 1; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .rule-input:focus { outline: none; border-color: var(--accent); }
+  .flag-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; }
+  .flag-btn:hover { background: var(--panel-2); color: var(--text); }
+  .flag-panel { background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; margin-top: 12px; display: none; }
+  .flag-panel h3 { font-size: 13px; margin: 0 0 10px 0; color: var(--accent); }
+  .flag-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .flag-cat-select { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -239,6 +280,34 @@ _INDEX_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="panel" style="margin-bottom:24px">
+    <h2>Classification Rules</h2>
+    <div class="rules-list" id="rules-list"></div>
+    <div class="rule-add">
+      <input type="text" id="rule-input" class="rule-input" placeholder="e.g. Emails from @corp.com are work">
+      <button class="run-btn" onclick="addRule()" style="white-space:nowrap">Add Rule</button>
+    </div>
+    <div class="flag-panel" id="flag-panel">
+      <h3 id="flag-heading">Flag misclassification</h3>
+      <div class="flag-row">
+        <span style="color:var(--muted);font-size:13px">Correct category:</span>
+        <select id="flag-cat" class="flag-cat-select">
+          <option value="newsletter">newsletter</option>
+          <option value="receipt">receipt</option>
+          <option value="calendar">calendar</option>
+          <option value="personal">personal</option>
+          <option value="work">work</option>
+          <option value="junk">junk</option>
+        </select>
+      </div>
+      <div class="rule-add">
+        <input type="text" id="flag-rule-input" class="rule-input" placeholder="Rule suggestion — edit before saving">
+        <button class="run-btn" onclick="saveFlagRule()" style="white-space:nowrap">Save Rule</button>
+        <button class="flag-btn" onclick="closeFlag()" style="font-size:20px;color:var(--muted)">×</button>
+      </div>
+    </div>
+  </div>
+
   <div class="row">
     <div class="panel">
       <h2>Daily volume by category</h2>
@@ -267,7 +336,7 @@ _INDEX_HTML = """<!doctype html>
   <div class="panel">
     <h2>Recent events</h2>
     <table id="recent-table">
-      <thead><tr><th>Time</th><th>Sender</th><th>Subject</th><th>Category</th><th>Conf.</th><th>Action</th></tr></thead>
+      <thead><tr><th>Time</th><th>Sender</th><th>Subject</th><th>Category</th><th>Conf.</th><th>Action</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -354,6 +423,9 @@ function renderRecent(events) {
   tbody.innerHTML = "";
   for (const e of events) {
     const tr = document.createElement("tr");
+    tr.dataset.sender = e.sender;
+    tr.dataset.subject = e.subject;
+    tr.dataset.category = e.category;
     tr.innerHTML = `
       <td>${e.ts.slice(11,19)}</td>
       <td>${escapeHtml(e.sender)}</td>
@@ -361,6 +433,7 @@ function renderRecent(events) {
       <td><span class="pill" style="background:${CATEGORY_COLORS[e.category] || "#888"}22;color:${CATEGORY_COLORS[e.category] || "#fff"}">${e.category}</span></td>
       <td>${e.confidence.toFixed(2)}</td>
       <td>${escapeHtml(e.action_notes || "")}</td>
+      <td><button class="flag-btn" title="Flag misclassification" onclick="openFlag(this)">🚩</button></td>
     `;
     tbody.appendChild(tr);
   }
@@ -473,7 +546,88 @@ function connectStream() {
   };
 }
 
+// ── Rules management ─────────────────────────────────────────────────────────
+
+async function loadRules() {
+  const resp = await fetch("/api/rules");
+  const data = await resp.json();
+  renderRules(data.rules);
+}
+
+function renderRules(rules) {
+  const list = document.getElementById("rules-list");
+  list.innerHTML = "";
+  if (!rules.length) {
+    list.innerHTML = '<span style="color:var(--muted);font-size:13px">No custom rules yet — defaults apply.</span>';
+    return;
+  }
+  for (const r of rules) {
+    const row = document.createElement("div");
+    row.className = "rule-row";
+    row.dataset.id = r.id;
+    row.innerHTML = `<span class="rule-text">${escapeHtml(r.rule)}</span><button class="del-btn" title="Delete rule" onclick="deleteRule(${r.id})">×</button>`;
+    list.appendChild(row);
+  }
+}
+
+async function addRule() {
+  const input = document.getElementById("rule-input");
+  const rule = input.value.trim();
+  if (!rule) return;
+  await fetch("/api/rules", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rule}) });
+  input.value = "";
+  loadRules();
+}
+
+async function deleteRule(id) {
+  await fetch(`/api/rules/${id}`, { method: "DELETE" });
+  loadRules();
+}
+
+document.getElementById("rule-input").addEventListener("keydown", e => { if (e.key === "Enter") addRule(); });
+
+// ── Flag / feedback flow ──────────────────────────────────────────────────────
+
+let _flagSender = "", _flagCategory = "";
+
+function openFlag(btn) {
+  const tr = btn.closest("tr");
+  _flagSender = tr.dataset.sender || "";
+  _flagCategory = tr.dataset.category || "";
+  const subject = tr.dataset.subject || "";
+  document.getElementById("flag-heading").textContent = `Flag: "${subject}"`;
+  const catSelect = document.getElementById("flag-cat");
+  // Pre-select the opposite of current to nudge the user
+  catSelect.value = _flagCategory === "newsletter" ? "work" : "newsletter";
+  _updateFlagSuggestion();
+  catSelect.onchange = _updateFlagSuggestion;
+  document.getElementById("flag-panel").style.display = "block";
+  document.getElementById("flag-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function _updateFlagSuggestion() {
+  const correctCat = document.getElementById("flag-cat").value;
+  const domain = _flagSender.includes("@") ? _flagSender.split("@").pop() : _flagSender;
+  document.getElementById("flag-rule-input").value = `Emails from @${domain} are ${correctCat}, not ${_flagCategory}`;
+}
+
+async function saveFlagRule() {
+  const rule = document.getElementById("flag-rule-input").value.trim();
+  if (!rule) return;
+  await fetch("/api/rules", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rule}) });
+  closeFlag();
+  loadRules();
+}
+
+function closeFlag() {
+  document.getElementById("flag-panel").style.display = "none";
+  document.getElementById("flag-rule-input").value = "";
+}
+
+document.getElementById("flag-rule-input").addEventListener("keydown", e => { if (e.key === "Enter") saveFlagRule(); });
+
 refresh();
+loadRules();
 connectStream();
 setInterval(refresh, 30000);
 </script>

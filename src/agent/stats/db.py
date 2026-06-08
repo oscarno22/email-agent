@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS email_events (
 CREATE INDEX IF NOT EXISTS idx_email_events_ts ON email_events(ts);
 CREATE INDEX IF NOT EXISTS idx_email_events_category ON email_events(category);
 CREATE INDEX IF NOT EXISTS idx_email_events_gmail_id ON email_events(gmail_id);
+
+CREATE TABLE IF NOT EXISTS user_rules (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts   TEXT    NOT NULL,
+    rule TEXT    NOT NULL
+);
 """
 
 
@@ -188,6 +194,29 @@ def get_events_for_date(date: str) -> list[dict[str, Any]]:
             (date,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_user_rules() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, ts, rule FROM user_rules ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_user_rule(rule: str) -> int:
+    from datetime import UTC, datetime
+
+    ts = datetime.now(UTC).isoformat()
+    with connect() as conn:
+        cur = conn.execute("INSERT INTO user_rules (ts, rule) VALUES (?, ?)", (ts, rule))
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def delete_user_rule(rule_id: int) -> bool:
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM user_rules WHERE id = ?", (rule_id,))
+        return cur.rowcount > 0
 
 
 def message_already_processed(gmail_id: str) -> bool:

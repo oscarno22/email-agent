@@ -86,10 +86,21 @@ def extract_features(state: State) -> State:
 
 def classify_node(state: State) -> State:
     assert state.features is not None, "extract_features must run before classify"
+    from agent.core.rules import DEFAULT_RULES
+    from agent.stats.db import get_user_rules
+
+    user_rule_rows = get_user_rules()
+    if user_rule_rows:
+        user_rule_text = "\n".join(r["rule"] for r in user_rule_rows)
+        rules = f"{user_rule_text}\n{DEFAULT_RULES}"
+    else:
+        rules = DEFAULT_RULES
+
     classification = classify(
         sender=state.email.sender,
         subject=state.email.subject,
         body_excerpt=state.features.body_excerpt,
+        rules=rules,
     )
     return state.model_copy(
         update={
