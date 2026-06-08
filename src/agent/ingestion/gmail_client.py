@@ -66,6 +66,31 @@ def _load_credentials() -> Credentials:
         return _cached_creds
 
 
+def check_credentials() -> None:
+    """Raise RuntimeError if no Gmail credentials are available.
+
+    Called at server startup so the process fails immediately rather than
+    accepting webhook requests that will all fail at the first Gmail API call.
+    """
+    has_env = bool(
+        os.getenv("GMAIL_CLIENT_ID")
+        and os.getenv("GMAIL_CLIENT_SECRET")
+        and os.getenv("GMAIL_REFRESH_TOKEN")
+    )
+    if has_env:
+        logger.debug("[gmail] credentials: using env vars")
+        return
+    if TOKEN_PATH.exists():
+        logger.debug("[gmail] credentials: using token.json fallback")
+        return
+    raise RuntimeError(
+        "No Gmail credentials found. "
+        "Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REFRESH_TOKEN env vars "
+        "(required in any containerised deployment), "
+        "or provide src/token.json for local dev."
+    )
+
+
 def get_service():
     """Return a per-thread Gmail service instance (httplib2 is not thread-safe)."""
     if not hasattr(_local, "service"):

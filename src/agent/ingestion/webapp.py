@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from langgraph_sdk import get_client
 
-from agent.ingestion.gmail_client import fetch_email, list_history
+from agent.ingestion.gmail_client import check_credentials, fetch_email, list_history
 from agent.stats.dashboard import router as _dashboard_router
 from agent.stats.db import init_db
 from agent.stats.events import attach_loop
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    await asyncio.to_thread(check_credentials)
     await asyncio.to_thread(init_db)
     attach_loop(asyncio.get_running_loop())
     yield
