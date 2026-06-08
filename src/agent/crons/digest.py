@@ -1,30 +1,23 @@
-import json
 import logging
 import os
 from collections import Counter
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from agent.core.state import Category
 from agent.ingestion.gmail_client import send_email
+from agent.stats.db import get_events_for_date
 
 logger = logging.getLogger(__name__)
 
-_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
 
 
 def main() -> None:
     yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
-    log_file = _LOG_DIR / f"{yesterday}.jsonl"
+    entries = get_events_for_date(yesterday)
 
-    if not log_file.exists():
-        logger.info("[digest] no log for %s — nothing to send", yesterday)
-        return
-
-    entries = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
     if not entries:
-        logger.info("[digest] empty log for %s — nothing to send", yesterday)
+        logger.info("[digest] no events for %s — nothing to send", yesterday)
         return
 
     counts = Counter(e["category"] for e in entries)

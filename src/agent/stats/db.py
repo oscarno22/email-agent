@@ -175,6 +175,21 @@ def get_top_senders(limit: int = 10) -> list[dict[str, Any]]:
         return [{"sender": r["sender"], "count": r["n"], "junk_count": r["junk_n"]} for r in rows]
 
 
+def get_events_for_date(date: str) -> list[dict[str, Any]]:
+    """Return all events for a given date (YYYY-MM-DD), ordered by time."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT category, sender, subject
+            FROM email_events
+            WHERE substr(ts, 1, 10) = ?
+            ORDER BY ts
+            """,
+            (date,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_recent_events(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
