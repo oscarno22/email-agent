@@ -9,7 +9,7 @@ ECR_REPO    = email-agent
 STACK_NAME  = email-agent
 SECRET_NAME = email-agent/production
 
-.PHONY: start start-docker ngrok format check check-fix renew-watch digest setup-crons dashboard backfill smoke \
+.PHONY: start start-docker ngrok format check check-fix test renew-watch digest setup-crons dashboard backfill smoke \
         deploy-bootstrap secrets-create deploy-infra build push logs status
 
 help:
@@ -88,6 +88,12 @@ smoke:
 	source .venv/bin/activate && \
 	set -a && source ../.env && set +a && \
 	uv run python -m agent.dev.smoke
+
+test:
+	cd src/agent && \
+	uv sync && \
+	source .venv/bin/activate && \
+	uv run pytest -v
 
 
 # ── AWS deployment ─────────────────────────────────────────────────────────────
