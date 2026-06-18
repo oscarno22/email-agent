@@ -60,6 +60,7 @@ start-docker:
 renew-watch:
 	cd src/agent && \
 	source .venv/bin/activate && \
+	set -a && source ../.env && set +a && \
 	uv run python -m agent.crons.renew_watch
 
 digest:
