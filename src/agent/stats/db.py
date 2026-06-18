@@ -198,9 +198,7 @@ def get_events_for_date(date: str) -> list[dict[str, Any]]:
 
 def get_user_rules() -> list[dict[str, Any]]:
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT id, ts, rule FROM user_rules ORDER BY id ASC"
-        ).fetchall()
+        rows = conn.execute("SELECT id, ts, rule FROM user_rules ORDER BY id ASC").fetchall()
         return [dict(r) for r in rows]
 
 

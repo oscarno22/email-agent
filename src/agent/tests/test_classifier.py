@@ -8,11 +8,11 @@ from agent.core.classifier import (
     CONFIDENCE_ESCALATION_THRESHOLD,
     HAIKU,
     SONNET,
-    classify,
     _build_user_message,
     _parse_tool_use,
+    classify,
 )
-from agent.core.state import Category, Classification
+from agent.core.state import Category
 
 
 def _tool_response(category: str, confidence: float, reasoning: str = "test reason") -> MagicMock:
@@ -87,8 +87,8 @@ def test_high_confidence_uses_haiku_only():
 
 def test_low_confidence_escalates_to_sonnet():
     client = _mock_client(
-        _tool_response("newsletter", 0.4),   # Haiku: uncertain
-        _tool_response("work", 0.88),         # Sonnet: confident
+        _tool_response("newsletter", 0.4),  # Haiku: uncertain
+        _tool_response("work", 0.88),  # Sonnet: confident
     )
     result = classify("boss@company.com", "Q3 review", "body", client=client)
     assert result.category == Category.WORK

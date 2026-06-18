@@ -7,35 +7,36 @@ import pytest
 
 from agent.core.nodes import (
     CATEGORY_NODES,
+    action_calendar,
     action_junk,
     action_newsletter,
     action_receipt,
-    action_calendar,
     action_unknown,
     extract_features,
     route_by_category,
 )
 from agent.core.state import Category, Classification, Email, Features, State, TrustPhase
 
-
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
 def _email(**kwargs) -> Email:
-    defaults = dict(
-        gmail_id="msg1",
-        thread_id="thread1",
-        sender="test@example.com",
-        sender_domain="example.com",
-        subject="Test subject",
-        body="Hello world",
-        received_at=datetime.now(UTC),
-    )
+    defaults = {
+        "gmail_id": "msg1",
+        "thread_id": "thread1",
+        "sender": "test@example.com",
+        "sender_domain": "example.com",
+        "subject": "Test subject",
+        "body": "Hello world",
+        "received_at": datetime.now(UTC),
+    }
     defaults.update(kwargs)
     return Email(**defaults)
 
 
-def _state(*, email: Email | None = None, trust_phase: TrustPhase = TrustPhase.SHADOW, **kwargs) -> State:
+def _state(
+    *, email: Email | None = None, trust_phase: TrustPhase = TrustPhase.SHADOW, **kwargs
+) -> State:
     return State(email=email or _email(), trust_phase=trust_phase, **kwargs)
 
 
