@@ -27,8 +27,14 @@ START → extract_features → classify → [route by category] → action_<cate
                                                                   │
                                                                   ├─► Gmail API (label / archive / draft)
                                                                   ├─► SQLite stats
-                                                                  └─► push_ui_message → SSE → dashboard
+                                                                  └─► SSE → dashboard
 ```
+
+The graph runs **in-process** inside a plain FastAPI app (`graph.ainvoke`), not
+on a LangGraph Platform server. The webhook enqueues onto an in-process asyncio
+queue and returns 200 immediately; a background worker drains it and runs the
+graph. Only the open-source `langgraph` library (the `StateGraph` DSL) is used —
+no licensed server runtime, Postgres, or Redis.
 
 - **`extract_features`** — cheap deterministic signals (unsubscribe markers,
   links, sender domain). No LLM.
@@ -39,9 +45,9 @@ START → extract_features → classify → [route by category] → action_<cate
 - **Action nodes** — build an `ActionPlan` (labels, archive, optional draft).
   Trust-phase-gated; see below.
 - **Stats sink** — every processed email is inserted into `src/stats.db` (SQLite). The dashboard reads from SQLite.
-- **Generative UI** — action nodes call `push_ui_message("email_card", …)` so
-  cards flow through the LangGraph stream / state, and the same payload is
-  fanned out over SSE to the dashboard's live feed.
+- **Live feed** — action nodes call `events.publish(...)`; the payload is fanned
+  out over SSE to the dashboard. Because the graph runs in the same process as
+  the dashboard, the live feed works natively.
 - **Batch review** — `POST /api/batch-review` fetches all unread inbox messages
   and runs each through the triage agent. Progress streams over SSE; the
   dashboard has a control panel with trust-phase selector, mark-read toggle,
@@ -78,9 +84,8 @@ Requires Python 3.12 and [`uv`](https://github.com/astral-sh/uv).
 cp src/.env.example src/.env
 # ...then fill in ANTHROPIC_API_KEY (LANGSMITH_* keys optional for tracing)
 
-# 2. Run the graph in LangGraph Studio
+# 2. Run the FastAPI app (uvicorn with --reload) on :2024
 make start
-# Studio opens; paste an email JSON into the input to invoke the graph.
 # Dashboard with live SSE feed is at http://localhost:2024/
 
 # 3. Smoke-test against built-in fixtures
@@ -96,7 +101,6 @@ For the live ingestion pipeline (Pub/Sub → webhook → graph) see
 make backfill      # JSONL action logs → SQLite (idempotent)
 make renew-watch   # renew the 7-day Gmail watch
 make digest        # run morning digest once
-make setup-crons   # register watch-renewal + digest crons on the LangGraph server
 make format        # ruff format
 make check         # ruff check --diff
 make check-fix     # ruff check --fix
@@ -108,16 +112,16 @@ The full application is two concurrent processes:
 
 | Process | Command | What it does |
 |---|---|---|
-| LangGraph server | `make start` | Runs the graph, webhook, and dashboard on `:2024`. The only required process. |
+| FastAPI app | `make start` | Runs the graph (in-process), webhook, and dashboard on `:2024`. The only required process. |
 | ngrok tunnel | `make ngrok` | Forwards GCP Pub/Sub push notifications to `localhost:2024`. Required for live ingestion; not needed when testing with fixtures. |
 
 `make dashboard` starts a standalone stats UI on `:8765` for browsing historical data without `make start` — but the SSE live feed is inactive in that mode (separate process).
 
-Scheduled tasks (`digest`, `renew_watch`) run inside the LangGraph server as registered crons — not as separate processes. They're registered once with `make setup-crons`.
+Scheduled tasks (`digest`, `renew_watch`) run inside the app process via APScheduler — not as separate processes. They're gated by `ENABLE_CRONS` (off in local dev, on in production), and on startup the app refreshes the Gmail watch when crons are enabled.
 
 ### Dev setup (live ingestion)
 
-1. **Terminal 1:** `make start` — LangGraph server + dashboard on `:2024`
+1. **Terminal 1:** `make start` — FastAPI app + dashboard on `:2024`
 2. **Terminal 2:** `ngrok http --url=<your-domain> 2024` (or `make ngrok`)
 3. `src/.env` needs at minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE=draft`, and `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN`
 4. Gmail watch must be active — `make renew-watch` if it's stale (expires every 7 days)
@@ -127,37 +131,33 @@ Scheduled tasks (`digest`, `renew_watch`) run inside the LangGraph server as reg
 
 ```
 cloudformation/
-  template.yml           # ECS Fargate stack (LangGraph + Postgres + Redis + ngrok sidecars, EFS, IAM)
+  template.yml           # ECS Fargate stack (FastAPI app + ngrok sidecar, EFS, IAM)
   github-oidc.yml        # one-time GitHub Actions IAM role bootstrap
   secrets-template.json  # fill in and run `make secrets-create`
 
 src/
-  langgraph.json         # LangGraph CLI config (graphs + http app + env)
+  Dockerfile             # uv + uvicorn image (built by `make build` / CI)
   .env                   # ANTHROPIC_API_KEY, GMAIL_*, TRUST_PHASE, PUBSUB_*, ENABLE_CRONS
-  stats.db               # SQLite stats DB (gitignored)
-  # Gmail history cursor stored in LangGraph store (InMemoryStore in dev, Postgres in prod)
+  stats.db               # SQLite stats DB + Gmail history cursor (gitignored)
   agent/
     pyproject.toml       # uv project root
 
-    core/                # LangGraph graph pipeline
-      state.py           # Pydantic schema (incl. UI message reducer) — read this first
+    core/                # Graph pipeline (langgraph StateGraph DSL, run in-process)
+      state.py           # Pydantic schema — read this first
       graph.py           # StateGraph wiring + conditional edges
-      nodes.py           # extract_features, action_*, trust-phase gate, stats + UI emit
+      nodes.py           # extract_features, action_*, trust-phase gate, stats + SSE emit
       classifier.py      # Haiku → Sonnet escalation, forced tool use
       drafter.py         # Reply draft generation for personal/work emails
       rules.py           # User-editable classification rules
 
-    ingestion/           # Email delivery: Gmail push → webhook → graph run
+    ingestion/           # Email delivery: Gmail push → webhook → in-process graph run
       gmail_client.py    # OAuth2 + Gmail API (history, fetch, modify, watch, drafts, send)
-      webapp.py          # POST /webhook/pubsub + dashboard routes (merged for in-process SSE)
+      webapp.py          # FastAPI app: /webhook/pubsub + worker queue + scheduler + dashboard
       batch_review.py    # Bulk inbox review — fetches unread messages and runs each through the agent
 
-    crons/               # Scheduled tasks (run inside the LangGraph server)
+    crons/               # Scheduled tasks (run in-process via APScheduler)
       digest.py          # Daily summary email from yesterday's SQLite events
-      digest_graph.py    # LangGraph graph wrapper for the digest cron
-      renew_watch.py     # Watch-renewal script (also runnable standalone)
-      renew_watch_graph.py # LangGraph graph wrapper for the watch-renewal cron
-      setup_crons.py     # Registers crons via the LangGraph SDK (ENABLE_CRONS gated)
+      renew_watch.py     # Watch-renewal (called by scheduler; also runnable standalone)
 
     stats/               # Persistence and dashboard UI
       db.py              # SQLite stats sink (portable schema, Postgres-ready)
@@ -192,7 +192,7 @@ src/
 
 Runs on AWS ECS Fargate. Infrastructure is CloudFormation; CI/CD is GitHub Actions (OIDC, no long-lived keys). See `cloudformation/` and `make help` for deployment targets.
 
-The ECS task runs four containers: LangGraph server, Postgres, Redis, and an ngrok agent (keeps the existing static domain, no ALB needed). EFS provides persistent storage for SQLite stats. All credentials live in AWS Secrets Manager.
+The ECS task runs two containers: the FastAPI app (built from `src/Dockerfile` — uvicorn on `:2024`) and an ngrok agent (keeps the existing static domain, no ALB needed). EFS provides persistent storage for the SQLite stats DB and the Gmail history cursor. All credentials live in AWS Secrets Manager. Crons (`ENABLE_CRONS=true` in prod) run in-process via APScheduler.
 
 ## Roadmap
 

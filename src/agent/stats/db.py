@@ -51,7 +51,14 @@ CREATE TABLE IF NOT EXISTS user_rules (
     ts   TEXT    NOT NULL,
     rule TEXT    NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS kv_store (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+_HISTORY_ID_KEY = "last_history_id"
 
 
 @contextmanager
@@ -215,6 +222,28 @@ def delete_user_rule(rule_id: int) -> bool:
     with connect() as conn:
         cur = conn.execute("DELETE FROM user_rules WHERE id = ?", (rule_id,))
         return cur.rowcount > 0
+
+
+def get_cursor() -> str | None:
+    """Return the persisted Gmail history cursor, or None if never set."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM kv_store WHERE key = ?",
+            (_HISTORY_ID_KEY,),
+        ).fetchone()
+        return row["value"] if row else None
+
+
+def set_cursor(history_id: str) -> None:
+    """Persist the latest Gmail history cursor."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO kv_store (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (_HISTORY_ID_KEY, history_id),
+        )
 
 
 def message_already_processed(gmail_id: str) -> bool:

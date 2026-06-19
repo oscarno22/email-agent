@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -37,8 +36,6 @@ from agent.stats.db import (
     init_db,
 )
 from agent.stats.events import attach_loop, subscribe
-
-_LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +98,7 @@ async def api_batch_review(request: Request, background_tasks: BackgroundTasks) 
             status_code=409,
         )
 
-    background_tasks.add_task(run_batch_review, trust_phase, mark_read, max_emails, _LANGGRAPH_URL)
+    background_tasks.add_task(run_batch_review, trust_phase, mark_read, max_emails)
     return JSONResponse({"status": "started"}, status_code=202)
 
 
@@ -245,7 +242,7 @@ _INDEX_HTML = """<!doctype html>
 </head>
 <body>
   <h1>Email Agent — Stats</h1>
-  <div class="sub">SQLite-backed; live cards stream from <code>push_ui_message</code> via SSE.
+  <div class="sub">SQLite-backed; live cards stream from in-process events via SSE.
     <span class="status" style="margin-left:12px"><span class="dot" id="dot"></span><span id="status-text">connecting…</span></span>
   </div>
 

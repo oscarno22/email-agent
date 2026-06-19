@@ -1,0 +1,9 @@
+# Build context is src/ — keep host-only and secret files out of the image
+agent/.venv
+**/__pycache__
+**/*.pyc
+.env
+*.db
+token.json
+credentials.json
+logs/

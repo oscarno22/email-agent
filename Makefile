@@ -9,17 +9,15 @@ ECR_REPO    = email-agent
 STACK_NAME  = email-agent
 SECRET_NAME = email-agent/production
 
-.PHONY: start start-docker ngrok format check check-fix test renew-watch digest setup-crons dashboard backfill smoke \
+.PHONY: start ngrok format check check-fix test renew-watch digest dashboard backfill smoke \
         deploy-bootstrap secrets-create deploy-infra build push logs status
 
 help:
 	@echo "Local dev:"
-	@echo "  start           - Start agent server in local dev (langgraph dev)"
-	@echo "  start-docker    - Start agent server in Docker (langgraph up, requires license)"
+	@echo "  start           - Start FastAPI app in local dev (uvicorn --reload on :$(LANGGRAPH_PORT))"
 	@echo "  ngrok           - Start ngrok tunnel (NGROK_DOMAIN=$(NGROK_DOMAIN))"
 	@echo "  dashboard       - Start standalone stats dashboard on http://localhost:$(DASHBOARD_PORT)"
 	@echo "  backfill        - Backfill JSONL action logs into SQLite stats DB"
-	@echo "  setup-crons     - Register watch renewal + digest crons on the running server"
 	@echo "  renew-watch     - Run watch renewal once manually"
 	@echo "  digest          - Run digest once manually"
 	@echo "  smoke           - Run graph against fixture emails"
@@ -35,7 +33,7 @@ help:
 	@echo "  After step 4, push to main and GitHub Actions handles all future deploys."
 	@echo ""
 	@echo "AWS operations:"
-	@echo "  build   - Build LangGraph Docker image locally (requires Docker + langgraph-cli)"
+	@echo "  build   - Build Docker image locally (uv + uvicorn, requires Docker)"
 	@echo "  push    - Push image to ECR"
 	@echo "  logs    - Tail ECS container logs (Ctrl-C to stop)"
 	@echo "  status  - Show ECS service task counts"
@@ -44,18 +42,11 @@ start:
 	cd src/agent && \
 	uv sync && \
 	source .venv/bin/activate && \
-	cd .. && \
-	langgraph dev
+	set -a && source ../.env && set +a && \
+	uv run uvicorn agent.ingestion.webapp:app --host 0.0.0.0 --port $(LANGGRAPH_PORT) --reload
 
 ngrok:
 	ngrok http --url=$(NGROK_DOMAIN) $(LANGGRAPH_PORT)
-
-start-docker:
-	cd src/agent && \
-	uv sync && \
-	source .venv/bin/activate && \
-	cd .. && \
-	langgraph up
 
 renew-watch:
 	cd src/agent && \
@@ -67,11 +58,6 @@ digest:
 	cd src/agent && \
 	source .venv/bin/activate && \
 	uv run python -m agent.crons.digest
-
-setup-crons:
-	cd src/agent && \
-	source .venv/bin/activate && \
-	uv run python -m agent.crons.setup_crons
 
 dashboard:
 	cd src/agent && \
@@ -117,7 +103,7 @@ secrets-create:
 	@test -f cloudformation/secrets.json || ( \
 		echo "ERROR: cloudformation/secrets.json not found." && \
 		echo "  cp cloudformation/secrets-template.json cloudformation/secrets.json" && \
-		echo "  # edit with real values (DATABASE_URI must contain the POSTGRES_PASSWORD)" && \
+		echo "  # edit with real values" && \
 		exit 1)
 	@aws secretsmanager create-secret \
 		--name $(SECRET_NAME) \
@@ -160,7 +146,7 @@ deploy-infra:
 			EcrImageUri=$(ECR_REGISTRY)/$(ECR_REPO):latest
 
 build:
-	cd src && touch .env && langgraph build --platform linux/amd64 -t $(ECR_REGISTRY)/$(ECR_REPO):latest
+	docker build --platform linux/amd64 -f src/Dockerfile -t $(ECR_REGISTRY)/$(ECR_REPO):latest src
 
 push:
 	aws ecr get-login-password --region $(AWS_REGION) | \

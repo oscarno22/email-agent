@@ -4,23 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from langgraph_sdk import get_client
-
-from agent.core.state import TrustPhase
+from agent.core.graph import graph
+from agent.core.state import State, TrustPhase
 from agent.ingestion.gmail_client import fetch_email, list_unread, mark_as_read
 from agent.stats.events import publish
 
 logger = logging.getLogger(__name__)
-
-_GMAIL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
-
-def _gmail_thread_uuid(gmail_thread_id: str) -> str:
-    return str(uuid.uuid5(_GMAIL_NS, gmail_thread_id))
 
 
 @dataclass
@@ -41,7 +33,6 @@ async def run_batch_review(
     trust_phase: TrustPhase = TrustPhase.LABEL,
     mark_read: bool = True,
     max_emails: int = 50,
-    langgraph_url: str = "http://localhost:2024",
 ) -> BatchStatus:
     """Fetch unread inbox messages and run each through the triage graph."""
     if _status.running:
@@ -63,23 +54,10 @@ async def run_batch_review(
             mark_read,
         )
 
-        client = get_client(url=langgraph_url)
-
         for msg_id in message_ids:
             try:
                 email_obj = await asyncio.to_thread(fetch_email, msg_id)
-                thread = await client.threads.create(
-                    thread_id=_gmail_thread_uuid(email_obj.thread_id),
-                    if_exists="do_nothing",
-                )
-                await client.runs.create(
-                    thread["thread_id"],
-                    "agent",
-                    input={
-                        "email": email_obj.model_dump(mode="json"),
-                        "trust_phase": trust_phase.value,
-                    },
-                )
+                await graph.ainvoke(State(email=email_obj, trust_phase=trust_phase))
                 if mark_read and trust_phase != TrustPhase.SHADOW:
                     await asyncio.to_thread(mark_as_read, msg_id)
                 _status.processed += 1

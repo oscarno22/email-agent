@@ -1,9 +1,10 @@
 """Process-local broadcast bus that the dashboard's SSE endpoint subscribes to.
 
 Action nodes call publish() after recording a stats row; any number of SSE
-clients receive a fan-out copy via subscribe(). Best-effort — if no event
-loop is running (e.g. langgraph dev runs nodes in a sync context), publish
-is a no-op.
+clients receive a fan-out copy via subscribe(). Graph nodes run in a thread
+pool (sync callables under ainvoke), so publish() hops back to the event loop
+via call_soon_threadsafe. Best-effort — if no loop is attached (e.g. the
+smoke script or `make dashboard` standalone), publish is a no-op.
 """
 
 from __future__ import annotations

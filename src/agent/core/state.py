@@ -1,8 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any
 
-from langgraph.graph.ui import ui_message_reducer
 from pydantic import BaseModel, Field
 
 
@@ -61,4 +59,3 @@ class State(BaseModel):
     action: ActionPlan | None = None
     trust_phase: TrustPhase = TrustPhase.SHADOW
     log: list[str] = Field(default_factory=list)
-    ui: Annotated[list[dict[str, Any]], ui_message_reducer] = Field(default_factory=list)

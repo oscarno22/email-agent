@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Email Agent - ECS Fargate (LangGraph + Postgres + Redis + ngrok), EFS
+Description: Email Agent - ECS Fargate (FastAPI app + ngrok), EFS
 
 # ---------------------------------------------------------------------------
 # Parameters
@@ -8,7 +8,7 @@ Parameters:
   EcrImageUri:
     Type: String
     Description: >
-      Full ECR image URI for the LangGraph server, e.g.
+      Full ECR image URI for the agent app, e.g.
       176331939239.dkr.ecr.us-east-1.amazonaws.com/email-agent:abc1234.
       Updated on every deploy by GitHub Actions.
     Default: "176331939239.dkr.ecr.us-east-1.amazonaws.com/email-agent:latest"
@@ -35,7 +35,7 @@ Parameters:
 
   TrustPhase:
     Type: String
-    Default: shadow
+    Default: draft
     AllowedValues: [shadow, label, archive, draft]
 
   DigestToEmail:
@@ -44,7 +44,7 @@ Parameters:
 
   EnableCrons:
     Type: String
-    Default: "false"
+    Default: "true"   # production runs the Gmail-watch renewal + daily digest
     AllowedValues: ["true", "false"]
 
 # ---------------------------------------------------------------------------
@@ -110,21 +110,6 @@ Resources:
       SecurityGroups:
         - !Ref EFSSecurityGroup
 
-  # Access point for Postgres data — runs as uid 999 (postgres user in postgres:16)
-  EFSAccessPointPostgres:
-    Type: AWS::EFS::AccessPoint
-    Properties:
-      FileSystemId: !Ref EFSFileSystem
-      PosixUser:
-        Uid: "999"
-        Gid: "999"
-      RootDirectory:
-        Path: /postgres
-        CreationInfo:
-          OwnerUid: "999"
-          OwnerGid: "999"
-          Permissions: "0700"
-
   # Access point for SQLite stats.db — world-writable so any container uid can write
   EFSAccessPointStats:
     Type: AWS::EFS::AccessPoint
@@ -171,17 +156,10 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
-      Cpu: "1024"    # 1 vCPU — shared across all 4 containers
-      Memory: "2048" # 2 GB
+      Cpu: "512"     # 0.5 vCPU — shared by the app + ngrok sidecar
+      Memory: "1024" # 1 GB
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       Volumes:
-        - Name: postgres-data
-          EFSVolumeConfiguration:
-            FilesystemId: !Ref EFSFileSystem
-            TransitEncryption: ENABLED
-            AuthorizationConfig:
-              AccessPointId: !Ref EFSAccessPointPostgres
-              IAM: DISABLED
         - Name: stats-data
           EFSVolumeConfiguration:
             FilesystemId: !Ref EFSFileSystem
@@ -191,69 +169,11 @@ Resources:
               IAM: DISABLED
       ContainerDefinitions:
 
-        # ── postgres:16 ────────────────────────────────────────────────────
-        - Name: postgres
-          Image: postgres:16
-          Essential: false
-          Memory: 512
-          Environment:
-            - Name: POSTGRES_DB
-              Value: langgraph
-            - Name: POSTGRES_USER
-              Value: postgres
-            # Use a subdirectory so EFS root metadata doesn't confuse Postgres init
-            - Name: PGDATA
-              Value: /var/lib/postgresql/data/pgdata
-          Secrets:
-            - Name: POSTGRES_PASSWORD
-              ValueFrom: !Sub "${SecretArn}:POSTGRES_PASSWORD::"
-          MountPoints:
-            - SourceVolume: postgres-data
-              ContainerPath: /var/lib/postgresql/data
-          HealthCheck:
-            Command: ["CMD-SHELL", "pg_isready -U postgres"]
-            Interval: 5
-            Timeout: 5
-            Retries: 10
-            StartPeriod: 30
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: /ecs/email-agent
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: postgres
-
-        # ── redis:7-alpine ─────────────────────────────────────────────────
-        - Name: redis
-          Image: redis:7-alpine
-          Essential: false
-          Memory: 128
-          HealthCheck:
-            Command: ["CMD", "redis-cli", "ping"]
-            Interval: 5
-            Timeout: 3
-            Retries: 10
-            StartPeriod: 10
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: /ecs/email-agent
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: redis
-
-        # ── LangGraph server (ECR image) ───────────────────────────────────
+        # ── Agent app (ECR image — FastAPI + in-process graph) ─────────────
         - Name: langgraph
           Image: !Ref EcrImageUri
           Essential: true
-          Memory: 1152
-          DependsOn:
-            - ContainerName: postgres
-              Condition: HEALTHY
-            - ContainerName: redis
-              Condition: HEALTHY
           Environment:
-            - Name: REDIS_URI
-              Value: redis://localhost:6379
             - Name: TRUST_PHASE
               Value: !Ref TrustPhase
             - Name: DIGEST_TO_EMAIL
@@ -262,8 +182,6 @@ Resources:
               Value: !Ref EnableCrons
             - Name: STATS_DB_PATH
               Value: /data/stats.db
-            - Name: LANGGRAPH_URL
-              Value: http://localhost:2024
           Secrets:
             - Name: ANTHROPIC_API_KEY
               ValueFrom: !Sub "${SecretArn}:ANTHROPIC_API_KEY::"
@@ -277,8 +195,6 @@ Resources:
               ValueFrom: !Sub "${SecretArn}:PUBSUB_TOPIC_NAME::"
             - Name: PUBSUB_VERIFICATION_TOKEN
               ValueFrom: !Sub "${SecretArn}:PUBSUB_VERIFICATION_TOKEN::"
-            - Name: DATABASE_URI
-              ValueFrom: !Sub "${SecretArn}:DATABASE_URI::"
           MountPoints:
             - SourceVolume: stats-data
               ContainerPath: /data

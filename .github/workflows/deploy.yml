@@ -26,17 +26,11 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Install langgraph-cli
-        run: pip install "langgraph-cli>=0.4.27"
-
       - name: Build image
-        working-directory: src
         env:
           IMAGE_URI: ${{ steps.ecr-login.outputs.registry }}/email-agent:${{ github.sha }}
         run: |
-          # langgraph.json references .env — touch an empty one so the build doesn't warn
-          touch .env
-          langgraph build --platform linux/amd64 -t "$IMAGE_URI"
+          docker build --platform linux/amd64 -f src/Dockerfile -t "$IMAGE_URI" src
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
 
       - name: Push to ECR

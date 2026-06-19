@@ -1,12 +1,9 @@
-import logging
 from datetime import UTC, datetime
 
 from agent.core.classifier import classify
 from agent.core.state import ActionPlan, Category, Features, State, TrustPhase
 from agent.stats.db import record_event
 from agent.stats.events import publish
-
-logger = logging.getLogger(__name__)
 
 _CATEGORY_ACCENT = {
     "newsletter": "#6b8afd",
@@ -54,14 +51,6 @@ def _append_action_log(state: State, plan: ActionPlan) -> None:
     )
     ui_props = _ui_props(state, plan, ts)
     publish({"type": "email_processed", "props": ui_props})
-    try:
-        from langgraph.graph.ui import push_ui_message
-
-        push_ui_message("email_card", ui_props)
-    except Exception:
-        # push_ui_message only works inside a LangGraph run context; the
-        # smoke script & dashboard invocations don't have one, so swallow.
-        logger.debug("[nodes] push_ui_message skipped (no run context)")
 
 
 UNSUBSCRIBE_MARKERS = ("unsubscribe", "manage preferences", "opt out", "opt-out")

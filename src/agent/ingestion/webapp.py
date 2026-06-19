@@ -3,19 +3,63 @@ import base64
 import json
 import logging
 import os
-import uuid
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
-from langgraph_sdk import get_client
 
+from agent.core.graph import graph
+from agent.core.state import Email, State, TrustPhase
+from agent.crons import digest, renew_watch
 from agent.ingestion.gmail_client import check_credentials, fetch_email, list_history
 from agent.stats.dashboard import router as _dashboard_router
-from agent.stats.db import init_db, message_already_processed
+from agent.stats.db import get_cursor, init_db, message_already_processed, set_cursor
 from agent.stats.events import attach_loop
+
+load_dotenv()
 
 logging.getLogger("agent").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+_VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
+_TRUST_PHASE = TrustPhase(os.getenv("TRUST_PHASE", "draft"))
+_ENABLE_CRONS = os.getenv("ENABLE_CRONS", "false").lower() == "true"
+
+# Webhook → worker hand-off. The webhook enqueues and returns 200 immediately
+# (Pub/Sub redelivers on a slow ack); a single worker drains the queue and runs
+# the graph in-process, keeping cursor/dedup handling serialized.
+_queue: asyncio.Queue[Email] = asyncio.Queue(maxsize=500)
+
+
+async def _worker() -> None:
+    while True:
+        email = await _queue.get()
+        try:
+            await graph.ainvoke(State(email=email, trust_phase=_TRUST_PHASE))
+        except Exception:
+            logger.exception("[worker] graph run failed for %s", email.gmail_id)
+        finally:
+            _queue.task_done()
+
+
+async def _renew_watch_job() -> None:
+    await asyncio.to_thread(renew_watch.main)
+
+
+async def _digest_job() -> None:
+    await asyncio.to_thread(digest.main)
+
+
+def _start_scheduler():
+    """Start APScheduler with watch-renewal + daily digest jobs."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(_renew_watch_job, CronTrigger(day="*/6", hour=9), id="renew_watch")
+    scheduler.add_job(_digest_job, CronTrigger(hour=7), id="digest")
+    scheduler.start()
+    return scheduler
 
 
 @asynccontextmanager
@@ -23,26 +67,29 @@ async def _lifespan(app: FastAPI):
     await asyncio.to_thread(check_credentials)
     await asyncio.to_thread(init_db)
     attach_loop(asyncio.get_running_loop())
-    yield
+
+    worker = asyncio.create_task(_worker())
+
+    scheduler = None
+    if _ENABLE_CRONS:
+        # Refresh the 7-day Gmail watch on every deploy/restart, then schedule.
+        await asyncio.to_thread(renew_watch.main)
+        scheduler = _start_scheduler()
+    else:
+        logger.info("[lifespan] ENABLE_CRONS is not true — skipping watch renewal + scheduler")
+
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
+        # Drain in-flight emails before tearing the worker down on redeploy.
+        await _queue.join()
+        worker.cancel()
 
 
 app = FastAPI(lifespan=_lifespan)
 app.include_router(_dashboard_router)
-
-_VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
-_LANGGRAPH_URL = os.getenv("LANGGRAPH_URL", "http://localhost:2024")
-_TRUST_PHASE = os.getenv("TRUST_PHASE", "label")
-
-_GMAIL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # UUID URL namespace
-# Namespace + key used to persist the Gmail history cursor in the LangGraph store.
-# In dev (langgraph dev) this lives in InMemoryStore; in production it's Postgres-backed.
-_STORE_NS = ("webhook",)
-_HISTORY_ID_KEY = "last_history_id"
-
-
-def _gmail_thread_uuid(gmail_thread_id: str) -> str:
-    """Deterministic UUID derived from a Gmail thread ID."""
-    return str(uuid.uuid5(_GMAIL_NS, gmail_thread_id))
 
 
 @app.get("/health")
@@ -65,15 +112,7 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
         logger.error("[webhook] malformed pub/sub message: %s", exc)
         return Response(status_code=400)
 
-    client = get_client(url=_LANGGRAPH_URL)
-
-    try:
-        item = await client.store.get_item(_STORE_NS, _HISTORY_ID_KEY)
-        last_id = item["value"].get("id") if item else None
-    except Exception as exc:
-        logger.warning("[webhook] could not read last_history_id from store: %s", exc)
-        last_id = None
-
+    last_id = await asyncio.to_thread(get_cursor)
     start_id = last_id or str(int(history_id) - 1)
     logger.info(
         "[webhook] pub/sub received historyId=%s — querying from startHistoryId=%s",
@@ -87,10 +126,7 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
         logger.error("[webhook] history.list failed: %s", exc)
         return Response(status_code=200)
 
-    try:
-        await client.store.put_item(_STORE_NS, _HISTORY_ID_KEY, {"id": history_id})
-    except Exception as exc:
-        logger.warning("[webhook] could not persist last_history_id to store: %s", exc)
+    await asyncio.to_thread(set_cursor, history_id)
 
     if not message_ids:
         logger.info("[webhook] no new INBOX messages found")
@@ -113,24 +149,12 @@ async def pubsub_webhook(request: Request, token: str = "") -> Response:
                     email_obj.gmail_id,
                 )
                 continue
-            thread = await client.threads.create(
-                thread_id=_gmail_thread_uuid(email_obj.thread_id),
-                if_exists="do_nothing",
-            )
-            await client.runs.create(
-                thread["thread_id"],
-                "agent",
-                input={
-                    "email": email_obj.model_dump(mode="json"),
-                    "trust_phase": _TRUST_PHASE,
-                },
-            )
+            await _queue.put(email_obj)
             logger.info(
-                "[webhook] scheduled run — thread=%s from=%s subject=%r trust_phase=%s",
-                thread["thread_id"],
+                "[webhook] enqueued — from=%s subject=%r trust_phase=%s",
                 email_obj.sender,
                 email_obj.subject,
-                _TRUST_PHASE,
+                _TRUST_PHASE.value,
             )
         except Exception:
             logger.exception("[webhook] failed to process message %s", message_id)
