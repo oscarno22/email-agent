@@ -1,9 +1,18 @@
+import os
 from datetime import UTC, datetime
 
 from agent.core.classifier import classify
-from agent.core.state import ActionPlan, Category, Features, State, TrustPhase
+from agent.core.state import ActionPlan, Category, Email, Features, State, TrustPhase
 from agent.stats.db import record_event
 from agent.stats.events import publish
+
+_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+
+
+def _is_own_digest(email: Email) -> bool:
+    """The agent's own digest emails (sent self->self) — never draft a reply to these."""
+    return email.sender == _DIGEST_TO and email.subject.startswith("Email Agent")
+
 
 _CATEGORY_ACCENT = {
     "newsletter": "#6b8afd",
@@ -170,7 +179,7 @@ def action_calendar(state: State) -> State:
 
 def action_personal(state: State) -> State:
     draft_reply = None
-    if state.trust_phase == TrustPhase.DRAFT:
+    if state.trust_phase == TrustPhase.DRAFT and not _is_own_digest(state.email):
         from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)
@@ -187,7 +196,7 @@ def action_personal(state: State) -> State:
 
 def action_work(state: State) -> State:
     draft_reply = None
-    if state.trust_phase == TrustPhase.DRAFT:
+    if state.trust_phase == TrustPhase.DRAFT and not _is_own_digest(state.email):
         from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)
