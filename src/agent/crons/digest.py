@@ -4,12 +4,13 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from agent.core.state import Category
-from agent.ingestion.gmail_client import send_email
+from agent.ingestion.gmail_client import apply_action, send_email
 from agent.stats.db import get_events_for_date
 
 logger = logging.getLogger(__name__)
 
 _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+_DAILY_DIGEST_LABEL = "Email Agent/Daily Digest"
 
 
 def main() -> None:
@@ -36,12 +37,18 @@ def main() -> None:
         for e in unknowns:
             lines.append(f"  {e['sender']}  |  {e['subject']}")
 
-    send_email(
+    msg_id = send_email(
         to=_DIGEST_TO,
         subject=f"Email Agent Digest — {yesterday}",
         body="\n".join(lines),
     )
     logger.info("[digest] sent to %s", _DIGEST_TO)
+
+    # The email already went out — a label failure must not undo that.
+    try:
+        apply_action(msg_id, [_DAILY_DIGEST_LABEL], archive=False)
+    except Exception:
+        logger.warning("[digest] could not label digest email %s", msg_id, exc_info=True)
 
 
 if __name__ == "__main__":

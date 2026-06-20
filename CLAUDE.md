@@ -26,7 +26,8 @@ make dashboard   # standalone stats UI on :8765 (historical data only — no liv
 make backfill    # JSONL action logs → SQLite (idempotent)
 make renew-watch # renew 7-day Gmail watch (operationally critical — expires silently)
 make refresh-token # regenerate the Gmail OAuth refresh token (browser flow)
-make digest      # run morning digest once manually
+make digest      # run daily digest once manually
+make quick-digest # run quick digest once manually (live Gmail list of new inbox mail)
 make smoke       # run graph against fixture emails (requires ANTHROPIC_API_KEY)
 ```
 
@@ -50,7 +51,7 @@ No test suite yet — `pytest` is in dev deps but unused.
 |---|---|
 | `core/` | Graph pipeline (langgraph `StateGraph` DSL) — `state`, `graph`, `nodes`, `classifier`, `drafter`, `rules` |
 | `ingestion/` | Email delivery — `gmail_client` (OAuth + API wrapper), `webapp` (FastAPI app: webhook + worker queue + scheduler + dashboard routes), `batch_review` (bulk inbox processing) |
-| `crons/` | Scheduled tasks — `digest`, `renew_watch` (both expose `main()`, called by APScheduler and runnable manually) |
+| `crons/` | Scheduled tasks — `digest` (daily summary), `quick_digest` (every-3h live Gmail list of new inbox mail; AI-independent), `renew_watch` (all expose `main()`, called by APScheduler and runnable manually) |
 | `stats/` | Persistence & UI — `db` (SQLite), `events` (SSE bus), `backfill`, `dashboard` (APIRouter + standalone app) |
 | `dev/` | Dev tooling — `fixtures` (sample emails), `smoke` (smoke test runner) |
 
@@ -66,6 +67,7 @@ START → extract_features → classify → [route by category] → action_<cate
 
 - **`extract_features`** (`core/nodes.py`): cheap deterministic signals (unsubscribe markers, links, sender-domain check). No LLM.
 - **`classify`** (`core/classifier.py`): forced tool use on `classify_email`. **Two-tier cost strategy**: Haiku first; if `confidence < 0.6`, escalate to Sonnet and mark `needs_escalation=True`. The category enum exposed to the model excludes `UNKNOWN` — `UNKNOWN` is reserved for code paths the model can't pick.
+- **AI-failure fallback**: classification fails before any Gmail mutation, so when the Anthropic call raises `APIError` (token expiry being the main risk), the worker (`ingestion/webapp.py`) leaves the email untouched, files it under `Email Agent/Needs Review`, and emails a throttled alert (≤1/hour, `kv_store` key `last_ai_alert_ts`). Labeling + alert are best-effort and never crash the worker. Gmail-token failure is separate (logged loudly by `_gmail_call`).
 - **Conditional routing**: `route_by_category` returns the category string; `CATEGORY_NODES` (a dict in `core/nodes.py`) maps each `Category` value to its action node. To add a category: add to the `Category` enum, add an entry to `CATEGORY_NODES`, write the action function. The graph wiring picks it up automatically.
 - **Action nodes**: each builds an `ActionPlan` and calls `_action()`. **`_action()` enforces the trust gradient**: in `TrustPhase.SHADOW`, it rewrites the plan's notes to `[shadow] would: …` so nothing actually fires. Real Gmail mutations would gate on `trust_phase` here. After acting, `_append_action_log` records to SQLite via `record_event` and emits a live event over the in-process SSE bus via `events.publish()` — no JSONL file is written. (The old LangGraph `push_ui_message` generative-UI channel was removed with the server.)
 
@@ -90,7 +92,7 @@ The stats dashboard is served by the FastAPI app in `webapp.py` — available at
 
 ## Startup behaviour
 
-`webapp.py` lifespan (in order): `check_credentials()` → `init_db()` → `attach_loop()` → start the background `_worker()` task. If `ENABLE_CRONS=true`, it also renews the Gmail watch once on startup and starts an `AsyncIOScheduler` (watch renewal every ~6 days, digest daily at 07:00 UTC). If no Gmail credentials are found (neither env vars nor `token.json`), the app raises immediately rather than accepting requests that will fail. On shutdown the lifespan drains the queue (`_queue.join()`), cancels the worker, and shuts the scheduler down.
+`webapp.py` lifespan (in order): `check_credentials()` → `init_db()` → `attach_loop()` → start the background `_worker()` task. If `ENABLE_CRONS=true`, it also renews the Gmail watch once on startup and starts an `AsyncIOScheduler` (watch renewal every ~6 days, daily digest at 07:00 UTC, quick digest every 3h during waking hours — 7/10/13/16/19/22 America/New_York). The quick digest (`crons/quick_digest.py`) reads **live from Gmail** (`search_messages` + `fetch_email`), not from SQLite, so it lists new inbox mail even when classification failed; it tracks a cursor in `kv_store` (`last_quick_digest_ts`) to only show mail since the last run. Both digests label their own sent email (`Email Agent/Daily Digest`, `Email Agent/Quick Digest`) for historical review. If no Gmail credentials are found (neither env vars nor `token.json`), the app raises immediately rather than accepting requests that will fail. On shutdown the lifespan drains the queue (`_queue.join()`), cancels the worker, and shuts the scheduler down.
 
 **Crons gating:** `ENABLE_CRONS` defaults to `false` so local dev never registers/renews the production Gmail watch or sends digests. Production sets it `true` (the CloudFormation `EnableCrons` parameter).
 

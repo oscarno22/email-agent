@@ -203,6 +203,16 @@ def get_events_for_date(date: str) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def get_category_for_gmail_id(gmail_id: str) -> str | None:
+    """Return the most recent classified category for a gmail_id, or None."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT category FROM email_events WHERE gmail_id = ? ORDER BY ts DESC LIMIT 1",
+            (gmail_id,),
+        ).fetchone()
+        return row["category"] if row else None
+
+
 def get_user_rules() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute("SELECT id, ts, rule FROM user_rules ORDER BY id ASC").fetchall()

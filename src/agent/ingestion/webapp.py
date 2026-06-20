@@ -8,17 +8,31 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+from anthropic import APIError
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request, Response
 
 from agent.core.graph import graph
 from agent.core.state import Email, State, TrustPhase
-from agent.crons import digest, renew_watch
+from agent.crons import digest, quick_digest, renew_watch
 from agent.ingestion import runtime_state
 from agent.ingestion.auth import require_dashboard_auth
-from agent.ingestion.gmail_client import check_credentials, fetch_email, list_history
+from agent.ingestion.gmail_client import (
+    apply_action,
+    check_credentials,
+    fetch_email,
+    list_history,
+    send_email,
+)
 from agent.stats.dashboard import router as _dashboard_router
-from agent.stats.db import get_cursor, init_db, kv_get, message_already_processed, set_cursor
+from agent.stats.db import (
+    get_cursor,
+    init_db,
+    kv_get,
+    kv_set,
+    message_already_processed,
+    set_cursor,
+)
 from agent.stats.events import attach_loop
 
 load_dotenv()
@@ -50,10 +64,62 @@ _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
 _TRUST_PHASE = TrustPhase(os.getenv("TRUST_PHASE", "draft"))
 _ENABLE_CRONS = os.getenv("ENABLE_CRONS", "false").lower() == "true"
 
+# AI-failure fallback (Anthropic token expiry / outage). On a classification
+# failure the email is left untouched and filed under a review label; an alert is
+# emailed at most once an hour so an outage doesn't spam one message per email.
+_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+_AI_FAILURE_LABEL = "Email Agent/Needs Review"
+_AI_ALERT_LABEL = "Email Agent/Alerts"
+_AI_ALERT_KEY = "last_ai_alert_ts"
+_AI_ALERT_THROTTLE = 3600  # seconds between alert emails
+
 # Webhook → worker hand-off. The webhook enqueues and returns 200 immediately
 # (Pub/Sub redelivers on a slow ack); a single worker drains the queue and runs
 # the graph in-process, keeping cursor/dedup handling serialized.
 _queue: asyncio.Queue[Email] = asyncio.Queue(maxsize=500)
+
+
+def _handle_ai_failure(email: Email, exc: Exception) -> None:
+    """Fallback when classification fails (Anthropic token expiry / outage).
+
+    Leaves the email untouched (no normal category label/archive) and files it
+    under a dedicated review label so it's findable, then emails a throttled alert
+    so an outage doesn't send one alert per message. Every step is best-effort —
+    nothing here may raise back into the worker.
+    """
+    runtime_state.mark_ai_error(str(exc))
+
+    try:
+        apply_action(email.gmail_id, [_AI_FAILURE_LABEL], archive=False)
+    except Exception:
+        logger.warning("[worker] could not label %s for review", email.gmail_id, exc_info=True)
+
+    try:
+        last = kv_get(_AI_ALERT_KEY)
+        now = int(datetime.now(UTC).timestamp())
+        if last and now - int(last) < _AI_ALERT_THROTTLE:
+            return
+        body = (
+            "Email Agent could not classify incoming mail — the AI call failed.\n\n"
+            "Most likely cause: ANTHROPIC_API_KEY is expired/invalid, or the Anthropic "
+            "API is temporarily unavailable.\n\n"
+            f"Error: {exc}\n\n"
+            f"Affected emails are left untouched in your inbox under "
+            f"'{_AI_FAILURE_LABEL}' for manual review. Classification resumes "
+            "automatically once the key is fixed."
+        )
+        msg_id = send_email(
+            to=_DIGEST_TO,
+            subject="⚠️ Email Agent — AI classification failing",
+            body=body,
+        )
+        kv_set(_AI_ALERT_KEY, str(now))
+        try:
+            apply_action(msg_id, [_AI_ALERT_LABEL], archive=False)
+        except Exception:
+            logger.warning("[worker] could not label AI alert %s", msg_id, exc_info=True)
+    except Exception:
+        logger.exception("[worker] failed to send AI-failure alert")
 
 
 async def _worker() -> None:
@@ -62,6 +128,15 @@ async def _worker() -> None:
         try:
             await graph.ainvoke(State(email=email, trust_phase=_TRUST_PHASE))
             runtime_state.touch_email_processed()
+            runtime_state.mark_ai_ok()
+        except APIError as exc:
+            logger.error(
+                "[worker] AI classification failed for gmail_id=%s from=%s — %s",
+                email.gmail_id,
+                email.sender,
+                exc,
+            )
+            await asyncio.to_thread(_handle_ai_failure, email, exc)
         except Exception:
             logger.exception(
                 "[worker] graph run failed for gmail_id=%s from=%s subject=%r",
@@ -81,14 +156,26 @@ async def _digest_job() -> None:
     await asyncio.to_thread(digest.main)
 
 
+async def _quick_digest_job() -> None:
+    await asyncio.to_thread(quick_digest.main)
+
+
 def _start_scheduler():
-    """Start APScheduler with watch-renewal + daily digest jobs."""
+    """Start APScheduler with watch-renewal + daily + quick digest jobs."""
+    from zoneinfo import ZoneInfo
+
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(_renew_watch_job, CronTrigger(day="*/6", hour=9), id="renew_watch")
     scheduler.add_job(_digest_job, CronTrigger(hour=7), id="digest")
+    # Quick digest every 3h during waking hours, in Eastern time (tracks DST).
+    scheduler.add_job(
+        _quick_digest_job,
+        CronTrigger(hour="7,10,13,16,19,22", timezone=ZoneInfo("America/New_York")),
+        id="quick_digest",
+    )
     scheduler.start()
     return scheduler
 
@@ -137,7 +224,7 @@ async def _lifespan(app: FastAPI):
                 "redeploy; the scheduled job will retry."
             )
         scheduler = _start_scheduler()
-        logger.info("[lifespan] scheduler started (watch renewal + daily digest)")
+        logger.info("[lifespan] scheduler started (watch renewal + daily + quick digest)")
     else:
         logger.info("[lifespan] ENABLE_CRONS is not true — skipping watch renewal + scheduler")
 

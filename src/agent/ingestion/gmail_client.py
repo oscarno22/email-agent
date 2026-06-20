@@ -160,6 +160,22 @@ def list_unread(max_results: int = 100) -> list[str]:
 
 
 @_gmail_call
+def search_messages(query: str, max_results: int = 100) -> list[str]:
+    """Return message IDs matching an arbitrary Gmail search query."""
+    logger.debug("[gmail] messages.list(q=%r, max=%d)", query, max_results)
+    result = (
+        get_service()
+        .users()
+        .messages()
+        .list(userId="me", q=query, maxResults=max_results)
+        .execute()
+    )
+    ids = [m["id"] for m in result.get("messages", [])]
+    logger.debug("[gmail] search_messages(%r) found %d message(s)", query, len(ids))
+    return ids
+
+
+@_gmail_call
 def mark_as_read(message_id: str) -> None:
     """Remove the UNREAD label from a message."""
     logger.debug("[gmail] mark_as_read message=%s", message_id)
@@ -283,19 +299,26 @@ def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> 
 
 
 @_gmail_call
-def send_email(to: str, subject: str, body: str) -> None:
-    """Send a plain-text email from the authenticated account."""
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send a plain-text email from the authenticated account. Returns the message id."""
     from email.mime.text import MIMEText
 
     message = MIMEText(body)
     message["to"] = to
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    get_service().users().messages().send(
-        userId="me",
-        body={"raw": raw},
-    ).execute()
+    result = (
+        get_service()
+        .users()
+        .messages()
+        .send(
+            userId="me",
+            body={"raw": raw},
+        )
+        .execute()
+    )
     logger.info("[gmail] sent email to=%s subject=%r", to, subject)
+    return result["id"]
 
 
 @_gmail_call

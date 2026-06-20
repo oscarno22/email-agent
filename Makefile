@@ -15,7 +15,7 @@ SECRET_NAME = email-agent/production
 TRUST_PHASE  ?= draft
 ENABLE_CRONS ?= true
 
-.PHONY: start ngrok format check check-fix test renew-watch refresh-token digest dashboard backfill smoke \
+.PHONY: start ngrok format check check-fix test renew-watch refresh-token digest quick-digest dashboard backfill smoke \
         deploy-bootstrap secrets-create deploy-infra build push logs status
 
 help:
@@ -26,7 +26,8 @@ help:
 	@echo "  backfill        - Backfill JSONL action logs into SQLite stats DB"
 	@echo "  renew-watch     - Run watch renewal once manually"
 	@echo "  refresh-token   - Regenerate the Gmail OAuth refresh token (browser flow)"
-	@echo "  digest          - Run digest once manually"
+	@echo "  digest          - Run daily digest once manually"
+	@echo "  quick-digest    - Run quick digest once manually (live Gmail list of new mail)"
 	@echo "  smoke           - Run graph against fixture emails"
 	@echo "  format          - Format codebase"
 	@echo "  check           - Run linters"
@@ -71,7 +72,14 @@ refresh-token:
 digest:
 	cd src/agent && \
 	source .venv/bin/activate && \
+	set -a && source ../.env && set +a && \
 	uv run python -m agent.crons.digest
+
+quick-digest:
+	cd src/agent && \
+	source .venv/bin/activate && \
+	set -a && source ../.env && set +a && \
+	uv run python -m agent.crons.quick_digest
 
 dashboard:
 	cd src/agent && \
