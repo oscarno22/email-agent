@@ -74,7 +74,18 @@ async def _lifespan(app: FastAPI):
     scheduler = None
     if _ENABLE_CRONS:
         # Refresh the 7-day Gmail watch on every deploy/restart, then schedule.
-        await asyncio.to_thread(renew_watch.main)
+        # A failure here (e.g. an expired/revoked refresh token) must NOT take the
+        # whole service down — otherwise the task crash-loops and the dashboard +
+        # /health become unreachable (and the ngrok sidecar dies with it). Log it
+        # and keep serving so the problem stays diagnosable; the scheduled job will
+        # retry the renewal once credentials are fixed.
+        try:
+            await asyncio.to_thread(renew_watch.main)
+        except Exception:
+            logger.exception(
+                "[lifespan] initial Gmail watch renewal failed — "
+                "continuing to serve; fix credentials and the scheduled job will retry"
+            )
         scheduler = _start_scheduler()
     else:
         logger.info("[lifespan] ENABLE_CRONS is not true — skipping watch renewal + scheduler")
