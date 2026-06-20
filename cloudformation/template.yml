@@ -203,6 +203,17 @@ Resources:
           PortMappings:
             - ContainerPort: 2024
               Protocol: tcp
+          # Gate ngrok on the app actually serving (HEALTHY below) so the tunnel
+          # never advertises a dead/booting backend. Uses stdlib urllib — no curl
+          # in the image.
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:2024/health', timeout=3).status==200 else 1)"
+            Interval: 15
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -217,11 +228,14 @@ Resources:
           Memory: 128
           DependsOn:
             - ContainerName: langgraph
-              Condition: START
+              Condition: HEALTHY
           Command:
             - http
             - "2024"
             - !Sub "--url=${NgrokStaticDomain}"
+            - "--log=stdout"
+            - "--log-level=info"
+            - "--log-format=logfmt"
           Secrets:
             - Name: NGROK_AUTHTOKEN
               ValueFrom: !Sub "${SecretArn}:NGROK_AUTHTOKEN::"

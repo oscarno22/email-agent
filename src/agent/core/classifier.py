@@ -1,9 +1,12 @@
+import logging
 import os
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIError
 
 from agent.core.rules import DEFAULT_RULES
 from agent.core.state import Category, Classification
+
+logger = logging.getLogger(__name__)
 
 HAIKU = "claude-haiku-4-5-20251001"
 SONNET = "claude-sonnet-4-6"
@@ -79,25 +82,42 @@ def classify(
     client = client or Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
     def _call(model: str) -> Classification:
-        response = client.messages.create(
-            model=model,
-            max_tokens=400,
-            system=SYSTEM_PROMPT,
-            tools=[CLASSIFY_TOOL],
-            tool_choice={"type": "tool", "name": "classify_email"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": _build_user_message(rules, sender, subject, body_excerpt),
-                }
-            ],
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=400,
+                system=SYSTEM_PROMPT,
+                tools=[CLASSIFY_TOOL],
+                tool_choice={"type": "tool", "name": "classify_email"},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _build_user_message(rules, sender, subject, body_excerpt),
+                    }
+                ],
+            )
+        except APIError as exc:
+            logger.error("[classify] Anthropic API error (model=%s): %s", model, exc)
+            raise
+        result = _parse_tool_use(response)
+        logger.info(
+            "[classify] model=%s category=%s confidence=%.2f",
+            model,
+            result.category.value,
+            result.confidence,
         )
-        return _parse_tool_use(response)
+        return result
 
     first = _call(HAIKU)
     if first.confidence >= CONFIDENCE_ESCALATION_THRESHOLD:
         return first
 
+    logger.info(
+        "[classify] confidence %.2f < %.2f — escalating to %s",
+        first.confidence,
+        CONFIDENCE_ESCALATION_THRESHOLD,
+        SONNET,
+    )
     escalated = _call(SONNET)
     escalated.needs_escalation = True
     return escalated

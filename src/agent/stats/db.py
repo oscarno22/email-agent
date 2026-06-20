@@ -224,6 +224,25 @@ def delete_user_rule(rule_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def kv_get(key: str) -> str | None:
+    """Read an arbitrary value from the kv_store, or None if absent."""
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def kv_set(key: str, value: str) -> None:
+    """Upsert an arbitrary value into the kv_store."""
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO kv_store (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+
+
 def get_cursor() -> str | None:
     """Return the persisted Gmail history cursor, or None if never set."""
     with connect() as conn:

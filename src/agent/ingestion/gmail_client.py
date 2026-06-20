@@ -3,17 +3,62 @@ import logging
 import os
 import threading
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from agent.core.state import Email
+from agent.ingestion import runtime_state
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+
+
+def _gmail_call(fn):
+    """Wrap a Gmail API call: log failures with context, track auth health, re-raise.
+
+    The Gmail refresh token is the single most common reason this service goes
+    quietly dead (Google revokes it after 7 days while the OAuth consent screen
+    is in "Testing"). A bare ``invalid_grant`` traceback is easy to miss, so we
+    surface it as a loud, actionable line and flag it in the runtime status that
+    ``/status`` reports.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            result = fn(*args, **kwargs)
+        except RefreshError as exc:
+            runtime_state.mark_gmail_error(f"refresh token expired/revoked: {exc}")
+            logger.error(
+                "[gmail] AUTH BROKEN in %s — refresh token expired or revoked. "
+                "Run `make refresh-token`, update src/.env + cloudformation/secrets.json, "
+                "`make secrets-create`, then force a new deployment. (%s)",
+                fn.__name__,
+                exc,
+            )
+            raise
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", "?")
+            if str(status) in ("401", "403"):
+                runtime_state.mark_gmail_error(f"HTTP {status} in {fn.__name__}: {exc}")
+                logger.error(
+                    "[gmail] AUTH/PERMISSION error (HTTP %s) in %s: %s", status, fn.__name__, exc
+                )
+            else:
+                logger.error("[gmail] API error (HTTP %s) in %s: %s", status, fn.__name__, exc)
+            raise
+        else:
+            runtime_state.mark_gmail_ok()
+            return result
+
+    return wrapper
+
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -98,6 +143,7 @@ def get_service():
     return _local.service
 
 
+@_gmail_call
 def list_unread(max_results: int = 100) -> list[str]:
     """Return message IDs of unread messages in INBOX."""
     logger.debug("[gmail] messages.list(q=is:unread in:inbox, max=%d)", max_results)
@@ -113,6 +159,7 @@ def list_unread(max_results: int = 100) -> list[str]:
     return ids
 
 
+@_gmail_call
 def mark_as_read(message_id: str) -> None:
     """Remove the UNREAD label from a message."""
     logger.debug("[gmail] mark_as_read message=%s", message_id)
@@ -123,6 +170,7 @@ def mark_as_read(message_id: str) -> None:
     ).execute()
 
 
+@_gmail_call
 def list_history(start_history_id: str) -> list[str]:
     """Return message IDs for new INBOX messages since startHistoryId."""
     logger.debug("[gmail] history.list(startHistoryId=%s)", start_history_id)
@@ -166,6 +214,7 @@ def _extract_plain_text(payload: dict) -> str:
     return ""
 
 
+@_gmail_call
 def fetch_email(message_id: str) -> Email:
     """Fetch a Gmail message and map it to an Email."""
     logger.debug("[gmail] fetching message %s", message_id)
@@ -215,6 +264,7 @@ def _get_label_id(name: str) -> str:
     return _label_id_cache[name]
 
 
+@_gmail_call
 def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> None:
     """Apply labels and optionally remove from INBOX."""
     if not labels_to_apply and not archive:
@@ -232,6 +282,7 @@ def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> 
     ).execute()
 
 
+@_gmail_call
 def send_email(to: str, subject: str, body: str) -> None:
     """Send a plain-text email from the authenticated account."""
     from email.mime.text import MIMEText
@@ -247,6 +298,7 @@ def send_email(to: str, subject: str, body: str) -> None:
     logger.info("[gmail] sent email to=%s subject=%r", to, subject)
 
 
+@_gmail_call
 def create_draft(thread_id: str, to: str, subject: str, body: str) -> str:
     """Create a Gmail draft reply in the given thread. Returns the draft ID."""
     from email.mime.text import MIMEText
@@ -270,6 +322,7 @@ def create_draft(thread_id: str, to: str, subject: str, body: str) -> str:
     return result["id"]
 
 
+@_gmail_call
 def register_watch(topic_name: str) -> dict:
     """Register Gmail push notifications for INBOX changes. Must be renewed every 7 days."""
     return (

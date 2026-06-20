@@ -3,7 +3,10 @@ import base64
 import json
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request, Response
@@ -11,15 +14,36 @@ from fastapi import Depends, FastAPI, Request, Response
 from agent.core.graph import graph
 from agent.core.state import Email, State, TrustPhase
 from agent.crons import digest, renew_watch
+from agent.ingestion import runtime_state
 from agent.ingestion.auth import require_dashboard_auth
 from agent.ingestion.gmail_client import check_credentials, fetch_email, list_history
 from agent.stats.dashboard import router as _dashboard_router
-from agent.stats.db import get_cursor, init_db, message_already_processed, set_cursor
+from agent.stats.db import get_cursor, init_db, kv_get, message_already_processed, set_cursor
 from agent.stats.events import attach_loop
 
 load_dotenv()
 
-logging.getLogger("agent").setLevel(logging.DEBUG)
+
+def _configure_logging() -> None:
+    """Install a root stdout handler so the app's own logs reach CloudWatch.
+
+    Without this, only uvicorn's access logs surface and every `agent.*` line
+    (webhook, gmail, lifespan) is dropped by Python's last-resort handler.
+    `force=True` ensures we own the root handler regardless of uvicorn's setup;
+    uvicorn configures only its own loggers, so they keep working.
+    """
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+        stream=sys.stdout,
+        force=True,
+    )
+    logging.getLogger("agent").setLevel(level)
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
@@ -37,8 +61,14 @@ async def _worker() -> None:
         email = await _queue.get()
         try:
             await graph.ainvoke(State(email=email, trust_phase=_TRUST_PHASE))
+            runtime_state.touch_email_processed()
         except Exception:
-            logger.exception("[worker] graph run failed for %s", email.gmail_id)
+            logger.exception(
+                "[worker] graph run failed for gmail_id=%s from=%s subject=%r",
+                email.gmail_id,
+                email.sender,
+                email.subject,
+            )
         finally:
             _queue.task_done()
 
@@ -65,11 +95,28 @@ def _start_scheduler():
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    runtime_state.mark_started()
+    logger.info(
+        "[lifespan] starting — trust_phase=%s crons=%s db=%s",
+        _TRUST_PHASE.value,
+        _ENABLE_CRONS,
+        os.getenv("STATS_DB_PATH", "<default>"),
+    )
+
     await asyncio.to_thread(check_credentials)
-    await asyncio.to_thread(init_db)
+    logger.info("[lifespan] Gmail credentials present")
+
+    try:
+        await asyncio.to_thread(init_db)
+    except Exception:
+        logger.exception("[lifespan] init_db FAILED — cannot persist stats/cursor")
+        raise
+    logger.info("[lifespan] db ready")
+
     attach_loop(asyncio.get_running_loop())
 
     worker = asyncio.create_task(_worker())
+    logger.info("[lifespan] worker started")
 
     scheduler = None
     if _ENABLE_CRONS:
@@ -81,23 +128,30 @@ async def _lifespan(app: FastAPI):
         # retry the renewal once credentials are fixed.
         try:
             await asyncio.to_thread(renew_watch.main)
-        except Exception:
+            logger.info("[lifespan] initial Gmail watch renewal OK")
+        except Exception as exc:
+            runtime_state.update(last_renew_status=f"failed: {exc}")
             logger.exception(
-                "[lifespan] initial Gmail watch renewal failed — "
-                "continuing to serve; fix credentials and the scheduled job will retry"
+                "[lifespan] initial Gmail watch renewal FAILED — continuing to serve. "
+                "If this is an auth error, run `make refresh-token`, update secrets, and "
+                "redeploy; the scheduled job will retry."
             )
         scheduler = _start_scheduler()
+        logger.info("[lifespan] scheduler started (watch renewal + daily digest)")
     else:
         logger.info("[lifespan] ENABLE_CRONS is not true — skipping watch renewal + scheduler")
 
+    logger.info("[lifespan] startup OK — listening on :2024")
     try:
         yield
     finally:
+        logger.info("[lifespan] shutting down")
         if scheduler is not None:
             scheduler.shutdown(wait=False)
         # Drain in-flight emails before tearing the worker down on redeploy.
         await _queue.join()
         worker.cancel()
+        logger.info("[lifespan] shutdown complete")
 
 
 app = FastAPI(lifespan=_lifespan)
@@ -109,11 +163,41 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/status", dependencies=[Depends(require_dashboard_auth)])
+async def status() -> dict[str, Any]:
+    """At-a-glance runtime health — Gmail token, last activity, queue, watch expiry.
+
+    Gated behind dashboard auth (it reveals token state); `/health` stays the open
+    trivial check for ECS.
+    """
+    snap = runtime_state.snapshot()
+    snap["trust_phase"] = _TRUST_PHASE.value
+    snap["enable_crons"] = _ENABLE_CRONS
+    snap["queue_depth"] = _queue.qsize()
+
+    # Fall back to the persisted watch expiry if this process hasn't renewed yet.
+    if snap.get("watch_expiration") is None:
+        snap["watch_expiration"] = await asyncio.to_thread(kv_get, "watch_expiration")
+
+    exp = snap.get("watch_expiration")
+    if exp:
+        try:
+            snap["watch_expiration_iso"] = datetime.fromtimestamp(
+                int(exp) / 1000, tz=UTC
+            ).isoformat()
+        except (ValueError, TypeError):
+            pass
+
+    return snap
+
+
 @app.post("/webhook/pubsub")
 async def pubsub_webhook(request: Request, token: str = "") -> Response:
     if _VERIFICATION_TOKEN and token != _VERIFICATION_TOKEN:
         logger.warning("[webhook] rejected request — bad verification token")
         return Response(status_code=403)
+
+    runtime_state.touch_webhook()
 
     try:
         body = await request.json()
