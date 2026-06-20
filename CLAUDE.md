@@ -51,7 +51,7 @@ No test suite yet — `pytest` is in dev deps but unused.
 |---|---|
 | `core/` | Graph pipeline (langgraph `StateGraph` DSL) — `state`, `graph`, `nodes`, `classifier`, `drafter`, `rules` |
 | `ingestion/` | Email delivery — `gmail_client` (OAuth + API wrapper), `webapp` (FastAPI app: webhook + worker queue + scheduler + dashboard routes), `batch_review` (bulk inbox processing) |
-| `crons/` | Scheduled tasks — `digest` (daily summary), `quick_digest` (every-3h live Gmail list of new inbox mail; AI-independent), `renew_watch` (all expose `main()`, called by APScheduler and runnable manually) |
+| `crons/` | Scheduled tasks — `digest` (daily summary), `quick_digest` (every-3h live Gmail list of new inbox mail; AI-independent), `digest_render` (shared MJML→HTML rendering for both digests), `renew_watch` (all expose `main()`, called by APScheduler and runnable manually) |
 | `stats/` | Persistence & UI — `db` (SQLite), `events` (SSE bus), `backfill`, `dashboard` (APIRouter + standalone app) |
 | `dev/` | Dev tooling — `fixtures` (sample emails), `smoke` (smoke test runner) |
 
@@ -88,6 +88,12 @@ The stats dashboard is served by the FastAPI app in `webapp.py` — available at
 - **Stats**: SQLite (`src/stats.db`, gitignored). Tables `email_events`, `user_rules`, `kv_store`. Path overridable via `STATS_DB_PATH`. Schema is intentionally Postgres-portable — migration is a connection-string swap when needed.
 - **Gmail history cursor**: stored in the SQLite `kv_store` table under key `"last_history_id"` via `get_cursor()` / `set_cursor()` in `stats/db.py`. In production this DB lives on EFS (`STATS_DB_PATH=/data/stats.db`), so the cursor survives redeploys.
 - **Digest**: reads from SQLite via `get_events_for_date(date)` in `stats/db.py` — no dependency on JSONL files.
+
+## Digest & draft email format
+
+- **Digests are HTML.** Both `crons/digest.py` and `crons/quick_digest.py` send a `multipart/alternative` email: the existing pipe-delimited plaintext as the fallback, plus an HTML alternative built by **`crons/digest_render.py`**. The HTML is authored in [MJML](https://mjml.io/) and compiled **in-process** via the `mjml-python` package (Rust `mrml` bindings — no Node toolchain). Layout is a compact table with color-coded category badges and summary count chips. All sender/subject/notes values are `html.escape`d before injection (they come from arbitrary email). HTML rendering is **best-effort**: a render exception is logged and the digest still sends plaintext-only, so a template bug can never block delivery.
+- **`send_email(to, subject, body, html=None)`** (`ingestion/gmail_client.py`): when `html` is given it builds `multipart/alternative` (plaintext part first as fallback, HTML part second as preferred); otherwise it sends a plain `MIMEText`. `create_draft` is unchanged — reply drafts stay plaintext.
+- **Draft replies** (`core/drafter.py`): the prompt instructs the model to open with `Dear <name>,` (name inferred from the sender, else `Dear there,`) and close with `Best,` / `Oscar Nolen`, with tone matched to the sender's register. To change this voice, edit `SYSTEM_PROMPT` there.
 - **JSONL logs** (`src/logs/`): no longer written. `stats/backfill.py` is a one-off migration tool for importing historical JSONL into SQLite.
 
 ## Startup behaviour

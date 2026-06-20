@@ -22,6 +22,7 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "apscheduler>=3.10",
     "python-dotenv>=1.0.0",
+    "mjml-python>=1.4.0",
 ]
 
 [dependency-groups]

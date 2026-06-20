@@ -3,6 +3,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from agent.crons.digest_render import render_quick_digest
 from agent.ingestion.gmail_client import apply_action, fetch_email, search_messages, send_email
 from agent.stats.db import get_event_for_gmail_id, kv_get, kv_set
 
@@ -59,21 +60,17 @@ def main() -> None:
     now_et = now.astimezone(_EASTERN)
     subject = f"Email Agent — Quick Digest ({now_et:%-I:%M %p ET})"
 
+    rows: list[dict] = []
     if not emails:
         # Always send an "all clear" so an empty run still confirms the cron is alive.
         last_run_et = last_run.astimezone(_EASTERN)
         subject += " — all clear"
-        lines = [
-            subject,
-            f"No new inbox mail since {last_run_et:%-I:%M %p ET}.",
-        ]
+        subtitle = f"No new inbox mail since {last_run_et:%-I:%M %p ET}."
+        lines = [subject, subtitle]
         logger.info("[quick_digest] no new mail since %s — sending all-clear", last_run.isoformat())
     else:
-        lines = [
-            subject,
-            f"{len(emails)} new email(s) in your inbox:",
-            "",
-        ]
+        subtitle = f"{len(emails)} new email(s) in your inbox"
+        lines = [subject, f"{subtitle}:", ""]
         for email, event in emails:
             received_et = email.received_at.astimezone(_EASTERN)
             category = event.get("category") if event else None
@@ -83,10 +80,26 @@ def main() -> None:
             lines.append(
                 f"  {received_et:%H:%M}  |  {email.sender}  |  {email.subject}{tag}{outcome}"
             )
+            rows.append(
+                {
+                    "time": f"{received_et:%H:%M}",
+                    "category": category,
+                    "sender": email.sender,
+                    "subject": email.subject,
+                    "action": action,
+                }
+            )
+
+    # HTML is best-effort — a render failure must never block the digest.
+    html = None
+    try:
+        html = render_quick_digest(rows, subtitle=subtitle)
+    except Exception:
+        logger.warning("[quick_digest] HTML render failed — sending plaintext only", exc_info=True)
 
     # Send first; only advance the cursor on success so a send failure re-covers
     # the window next run (bias toward duplicates over missed mail).
-    msg_id = send_email(to=_DIGEST_TO, subject=subject, body="\n".join(lines))
+    msg_id = send_email(to=_DIGEST_TO, subject=subject, body="\n".join(lines), html=html)
     kv_set(_CURSOR_KEY, str(int(now.timestamp())))
     logger.info("[quick_digest] sent %d email(s) to %s", len(emails), _DIGEST_TO)
 

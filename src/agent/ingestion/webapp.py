@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -268,12 +268,10 @@ async def status() -> dict[str, Any]:
 
     exp = snap.get("watch_expiration")
     if exp:
-        try:
+        with suppress(ValueError, TypeError):
             snap["watch_expiration_iso"] = datetime.fromtimestamp(
                 int(exp) / 1000, tz=UTC
             ).isoformat()
-        except (ValueError, TypeError):
-            pass
 
     return snap
 

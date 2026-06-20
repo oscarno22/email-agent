@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from agent.core.state import Category
+from agent.crons.digest_render import render_daily_digest
 from agent.ingestion.gmail_client import apply_action, send_email
 from agent.stats.db import get_events_for_date
 
@@ -76,10 +77,19 @@ def main() -> None:
         for e in unknowns:
             lines.append(f"  {e['sender']}  |  {e['subject']}")
 
+    # HTML is best-effort — a render failure must never block the digest, so fall
+    # back to the plaintext-only send below.
+    html = None
+    try:
+        html = render_daily_digest(entries, dict(counts), unknowns, yesterday)
+    except Exception:
+        logger.warning("[digest] HTML render failed — sending plaintext only", exc_info=True)
+
     msg_id = send_email(
         to=_DIGEST_TO,
         subject=f"Email Agent Digest — {yesterday}",
         body="\n".join(lines),
+        html=html,
     )
     logger.info("[digest] sent to %s", _DIGEST_TO)
 

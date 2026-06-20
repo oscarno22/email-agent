@@ -150,7 +150,7 @@ src/
       graph.py           # StateGraph wiring + conditional edges
       nodes.py           # extract_features, action_*, trust-phase gate, stats + SSE emit
       classifier.py      # Haiku → Sonnet escalation, forced tool use
-      drafter.py         # Reply draft generation for personal/work emails
+      drafter.py         # Reply draft generation (greeting + "Best, Oscar Nolen" sign-off)
       rules.py           # User-editable classification rules
 
     ingestion/           # Email delivery: Gmail push → webhook → in-process graph run
@@ -160,6 +160,8 @@ src/
 
     crons/               # Scheduled tasks (run in-process via APScheduler)
       digest.py          # Daily summary email from yesterday's SQLite events
+      quick_digest.py    # Every-3h live Gmail list of new inbox mail (AI-independent)
+      digest_render.py   # Shared MJML→HTML rendering for both digests
       renew_watch.py     # Watch-renewal (called by scheduler; also runnable standalone)
 
     stats/               # Persistence and dashboard UI

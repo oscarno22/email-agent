@@ -299,11 +299,24 @@ def apply_action(message_id: str, labels_to_apply: list[str], archive: bool) -> 
 
 
 @_gmail_call
-def send_email(to: str, subject: str, body: str) -> str:
-    """Send a plain-text email from the authenticated account. Returns the message id."""
-    from email.mime.text import MIMEText
+def send_email(to: str, subject: str, body: str, html: str | None = None) -> str:
+    """Send an email from the authenticated account. Returns the message id.
 
-    message = MIMEText(body)
+    `body` is the plain-text content. When `html` is given, the email is sent as
+    multipart/alternative with `body` as the fallback and `html` as the preferred
+    part, so clients that can't render HTML still show the plaintext digest.
+    """
+    if html is not None:
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        message = MIMEMultipart("alternative")
+        message.attach(MIMEText(body, "plain"))  # fallback first
+        message.attach(MIMEText(html, "html"))  # preferred part last
+    else:
+        from email.mime.text import MIMEText
+
+        message = MIMEText(body)
     message["to"] = to
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()

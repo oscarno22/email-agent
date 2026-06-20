@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = "==3.12.*"
 
 [[package]]
@@ -210,6 +210,7 @@ dependencies = [
     { name = "google-api-python-client" },
     { name = "google-auth-oauthlib" },
     { name = "langgraph" },
+    { name = "mjml-python" },
     { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -228,6 +229,7 @@ requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.100.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
     { name = "langgraph", specifier = ">=1.2.4" },
+    { name = "mjml-python", specifier = ">=1.4.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
@@ -576,6 +578,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/dd/f4c8a12987318e505b10760d30c3c2d45e8dc87ba8f47a004c753a9e7b35/langsmith-0.8.9.tar.gz", hash = "sha256:f16e37fcd5a8a2d4db30eae0e399a866a65ce5cc86218825c59409ed57a3bf53", size = 4428684, upload-time = "2026-06-03T17:56:09.448Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b5/2f/a701663c9fb4d9630448622a684bc372b4905b9a6dbe2297d55a70fde04e/langsmith-0.8.9-py3-none-any.whl", hash = "sha256:c9519cabc75568d088df045710d1b86eae9780c91054528b2aa7e6cb1fc80c52", size = 403165, upload-time = "2026-06-03T17:56:07.226Z" },
+]
+
+[[package]]
+name = "mjml-python"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/63/df6509ea81ecb8f59885b8dd9b2395e52db34b5da6c7d6511b44de0a48e1/mjml_python-1.4.0.tar.gz", hash = "sha256:cab9be42ae1da86c5addb50a1262c9f3ae34d1cf3d0a00d8740ceac7237e4f72", size = 10945, upload-time = "2026-04-10T04:17:18.659Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ea/8b/f6c2a1cae0fc4537ab71bf4ea10f95473d0c0c04c3b6f2053a018460fa44/mjml_python-1.4.0-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:eda0d1f3893c93f6be7db9e2dc1867eb5c8e9f8e985ca4a58f83b286acbb9503", size = 560599, upload-time = "2026-04-10T04:17:08.455Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/8c/7f34854e5b225e4b6e5c2aea707aae9e9e7fbfc41505c44fc1e428af0d24/mjml_python-1.4.0-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:1bb6a49694faca9595a57887dc474843417e05a0337fe42155a314fcd07004a7", size = 548688, upload-time = "2026-04-10T04:17:10.104Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/a0/92553f26360c97b172a45ce11f9dcdd72ad16b366b31067439702bd18a92/mjml_python-1.4.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e9daf8f043335bd17adca7b46c5bbdaf2923ee46b666357c8bb57abe6ebf6d56", size = 598586, upload-time = "2026-04-10T04:17:11.485Z" },
+    { url = "https://files.pythonhosted.org/packages/79/da/ff5aa0a9058f329ec67f61f500ed14472bb40442b45119987a7da262393f/mjml_python-1.4.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5e26a18634dd272d69c4af0b89369f51ea6c40c315a8fa1b5af15b00aec00376", size = 608028, upload-time = "2026-04-10T04:17:12.988Z" },
+    { url = "https://files.pythonhosted.org/packages/82/2d/1ef1a38b08d9676c5c8dba50a09fb1030b851db43a443118fc22a027ccd5/mjml_python-1.4.0-cp38-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:8e7d1dc554349af76a03516e321f6515a32a0a9aef41134ebce4966c39bc42ac", size = 774952, upload-time = "2026-04-10T04:17:14.228Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/77/d31b1af6a4226c4b6a77ef0215eb575f49e767282e6f8a5c58795e15fbf6/mjml_python-1.4.0-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:0f6f1cb5a67780c4ca1931baa05c287ac179f304e40862bb55279b285b66ced4", size = 688290, upload-time = "2026-04-10T04:17:15.729Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/35/6146c5941207605f10b22b915032bb67d53c4039fc3d2866575815be4760/mjml_python-1.4.0-cp38-abi3-win_amd64.whl", hash = "sha256:76399e51b5d3e5068836322ce2439c43b1c18a538dcf7a8637bdead356a76d09", size = 435757, upload-time = "2026-04-10T04:17:17.313Z" },
 ]
 
 [[package]]
