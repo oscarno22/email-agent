@@ -9,7 +9,13 @@ ECR_REPO    = email-agent
 STACK_NAME  = email-agent
 SECRET_NAME = email-agent/production
 
-.PHONY: start ngrok format check check-fix test renew-watch digest dashboard backfill smoke \
+# Production agent behaviour. CloudFormation reuses previous parameter values on
+# update, so these must be passed explicitly on every deploy-infra or the stack
+# silently keeps whatever it had. Override on the CLI, e.g. TRUST_PHASE=label.
+TRUST_PHASE  ?= draft
+ENABLE_CRONS ?= true
+
+.PHONY: start ngrok format check check-fix test renew-watch refresh-token digest dashboard backfill smoke \
         deploy-bootstrap secrets-create deploy-infra build push logs status
 
 help:
@@ -19,6 +25,7 @@ help:
 	@echo "  dashboard       - Start standalone stats dashboard on http://localhost:$(DASHBOARD_PORT)"
 	@echo "  backfill        - Backfill JSONL action logs into SQLite stats DB"
 	@echo "  renew-watch     - Run watch renewal once manually"
+	@echo "  refresh-token   - Regenerate the Gmail OAuth refresh token (browser flow)"
 	@echo "  digest          - Run digest once manually"
 	@echo "  smoke           - Run graph against fixture emails"
 	@echo "  format          - Format codebase"
@@ -53,6 +60,13 @@ renew-watch:
 	source .venv/bin/activate && \
 	set -a && source ../.env && set +a && \
 	uv run python -m agent.crons.renew_watch
+
+refresh-token:
+	cd src/agent && \
+	uv sync && \
+	source .venv/bin/activate && \
+	set -a && source ../.env && set +a && \
+	uv run python -m agent.dev.get_refresh_token
 
 digest:
 	cd src/agent && \
@@ -143,7 +157,9 @@ deploy-infra:
 		--no-fail-on-empty-changeset \
 		--parameter-overrides \
 			SecretArn=$(SECRET_ARN) \
-			EcrImageUri=$(ECR_REGISTRY)/$(ECR_REPO):latest
+			EcrImageUri=$(ECR_REGISTRY)/$(ECR_REPO):latest \
+			TrustPhase=$(TRUST_PHASE) \
+			EnableCrons=$(ENABLE_CRONS)
 
 build:
 	docker build --platform linux/amd64 -f src/Dockerfile -t $(ECR_REGISTRY)/$(ECR_REPO):latest src

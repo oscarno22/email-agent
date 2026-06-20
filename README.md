@@ -100,6 +100,7 @@ For the live ingestion pipeline (Pub/Sub → webhook → graph) see
 ```bash
 make backfill      # JSONL action logs → SQLite (idempotent)
 make renew-watch   # renew the 7-day Gmail watch
+make refresh-token # regenerate the Gmail OAuth refresh token (browser flow)
 make digest        # run morning digest once
 make format        # ruff format
 make check         # ruff check --diff
@@ -187,6 +188,12 @@ src/
 - **SSE live feed** works because `dashboard.py` and `webapp.py` share a process
   (same in-memory `events.py` bus). `make dashboard` (`:8765`) is a standalone
   fallback that only has historical data.
+- **Auth** — because the dashboard is mounted into the public webapp, every
+  dashboard route requires HTTP Basic Auth (`DASHBOARD_USER`/`DASHBOARD_PASSWORD`)
+  whenever `DASHBOARD_PASSWORD` is set; it's open when unset (local convenience).
+  `/health` and `/webhook/pubsub` stay open (the webhook keeps its `?token=`
+  check). `POST /api/batch-review` also clamps the requested trust phase to the
+  deployment's `TRUST_PHASE` ceiling.
 
 ## Deployment
 

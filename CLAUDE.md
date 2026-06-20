@@ -25,6 +25,7 @@ Other commands:
 make dashboard   # standalone stats UI on :8765 (historical data only — no live SSE)
 make backfill    # JSONL action logs → SQLite (idempotent)
 make renew-watch # renew 7-day Gmail watch (operationally critical — expires silently)
+make refresh-token # regenerate the Gmail OAuth refresh token (browser flow)
 make digest      # run morning digest once manually
 make smoke       # run graph against fixture emails (requires ANTHROPIC_API_KEY)
 ```
@@ -78,6 +79,8 @@ The stats dashboard is served by the FastAPI app in `webapp.py` — available at
 
 `stats/dashboard.py` exposes routes via `router = APIRouter()`, which `webapp.py` includes. A standalone `app` at the bottom of `dashboard.py` lets `make dashboard` still work on `:8765` for historical-data browsing without `make start`.
 
+**Auth:** the dashboard is mounted into the *public* webapp, so the router is gated by `require_dashboard_auth` (`ingestion/auth.py`) — HTTP Basic Auth via `DASHBOARD_USER` (default `admin`) / `DASHBOARD_PASSWORD`. It is **fail-open when `DASHBOARD_PASSWORD` is unset** (local `make start`/`make dashboard`) and enforced whenever it's set (the secret is supplied in any deployment). `/health` and `/webhook/pubsub` stay open — Pub/Sub can't send Basic Auth, so the webhook keeps its `?token=` check. The mutating `POST /api/batch-review` route additionally **clamps** its requested `trust_phase` to the process `TRUST_PHASE` ceiling so a request can't escalate beyond the deployment's configured action level.
+
 ## Persistence
 
 - **Stats**: SQLite (`src/stats.db`, gitignored). Tables `email_events`, `user_rules`, `kv_store`. Path overridable via `STATS_DB_PATH`. Schema is intentionally Postgres-portable — migration is a connection-string swap when needed.
@@ -92,6 +95,21 @@ The stats dashboard is served by the FastAPI app in `webapp.py` — available at
 **Crons gating:** `ENABLE_CRONS` defaults to `false` so local dev never registers/renews the production Gmail watch or sends digests. Production sets it `true` (the CloudFormation `EnableCrons` parameter).
 
 The `/health` endpoint (`GET /health`) returns `{"status": "ok"}` — used for health checks.
+
+## Dev vs. production (single Gmail watch)
+
+Gmail allows **one active push watch per account**, and dev + prod share one Pub/Sub topic and one ngrok static domain. So there is no parallel live pipeline:
+
+- **Production owns the only live watch** — `ENABLE_CRONS=true`, the prod ngrok domain, and the prod Pub/Sub push subscription. Crons renew the watch on startup + every ~6 days, keeping it alive indefinitely as long as the task runs.
+- **Local dev keeps `ENABLE_CRONS=false`** (the `.env.example` default) so a dev process never registers a watch or advances the shared history cursor. Exercise the graph with `make smoke` (fixtures) or the authenticated `POST /api/batch-review` against the live inbox in `shadow`/`label`.
+- **To get live push locally** (rare): temporarily re-point the Pub/Sub push subscription at your local ngrok URL and `make renew-watch` locally — then re-point to prod when done. Forgetting to re-point leaves prod blind. A true second pipeline requires a separate Google account + topic + ngrok domain (out of scope for v1).
+
+## Renewing access (when push stops)
+
+Two things expire:
+
+- **Gmail watch (7 days):** renewed automatically by crons in production. Run `make renew-watch` to renew manually.
+- **OAuth refresh token:** does *not* normally expire — **unless the OAuth consent screen is in "Testing" mode, in which case Google revokes refresh tokens after 7 days.** Crons cannot fix this. Publish the consent screen to **"In production"** (Google Cloud Console → APIs & Services → OAuth consent screen → Publish app) to make tokens durable. To mint a new token, run `make refresh-token` (browser flow; needs `GMAIL_CLIENT_ID/SECRET` in `src/.env`), then paste the value into `src/.env` and `cloudformation/secrets.json` and run `make secrets-create`.
 
 ## AWS Deployment
 

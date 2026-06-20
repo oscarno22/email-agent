@@ -17,11 +17,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 
-from fastapi import APIRouter, BackgroundTasks, FastAPI, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from agent.core.state import TrustPhase
+from agent.ingestion.auth import require_dashboard_auth
 from agent.ingestion.batch_review import _status as _batch_status
 from agent.ingestion.batch_review import run_batch_review
 from agent.stats.db import (
@@ -77,6 +79,16 @@ async def api_stream() -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+# Trust phases ordered least → most privileged. A batch-review request may not
+# escalate beyond what the deployment itself is configured to do (TRUST_PHASE).
+_PHASE_RANK = {
+    TrustPhase.SHADOW: 0,
+    TrustPhase.LABEL: 1,
+    TrustPhase.ARCHIVE: 2,
+    TrustPhase.DRAFT: 3,
+}
+
+
 @router.post("/api/batch-review")
 async def api_batch_review(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     body = await request.json()
@@ -85,6 +97,18 @@ async def api_batch_review(request: Request, background_tasks: BackgroundTasks) 
         trust_phase = TrustPhase(trust_phase_str)
     except ValueError:
         trust_phase = TrustPhase.LABEL
+
+    # Clamp to the deployment's configured ceiling so an authenticated request
+    # can't run a more privileged action than the process is meant to perform.
+    ceiling = TrustPhase(os.getenv("TRUST_PHASE", "draft"))
+    if _PHASE_RANK[trust_phase] > _PHASE_RANK[ceiling]:
+        logger.warning(
+            "[batch-review] clamping requested trust_phase=%s to ceiling=%s",
+            trust_phase.value,
+            ceiling.value,
+        )
+        trust_phase = ceiling
+
     mark_read = bool(body.get("mark_read", True))
     max_emails = min(int(body.get("max_emails", 50)), 500)
 
@@ -653,4 +677,4 @@ async def _startup() -> None:
     attach_loop(asyncio.get_running_loop())
 
 
-app.include_router(router)
+app.include_router(router, dependencies=[Depends(require_dashboard_auth)])

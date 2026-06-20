@@ -6,11 +6,12 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 
 from agent.core.graph import graph
 from agent.core.state import Email, State, TrustPhase
 from agent.crons import digest, renew_watch
+from agent.ingestion.auth import require_dashboard_auth
 from agent.ingestion.gmail_client import check_credentials, fetch_email, list_history
 from agent.stats.dashboard import router as _dashboard_router
 from agent.stats.db import get_cursor, init_db, message_already_processed, set_cursor
@@ -89,7 +90,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=_lifespan)
-app.include_router(_dashboard_router)
+app.include_router(_dashboard_router, dependencies=[Depends(require_dashboard_auth)])
 
 
 @app.get("/health")

@@ -49,6 +49,9 @@ select = [
     "C4",  # flake8-comprehensions
     "N",   # pep8-naming
 ]
+ignore = [
+    "B008",  # function call in arg default — idiomatic for FastAPI's Depends()
+]
 
 [tool.ruff.lint.per-file-ignores]
 # Long lines inside the inline HTML/CSS/JS template would be uglier if split.

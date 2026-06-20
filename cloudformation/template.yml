@@ -195,6 +195,8 @@ Resources:
               ValueFrom: !Sub "${SecretArn}:PUBSUB_TOPIC_NAME::"
             - Name: PUBSUB_VERIFICATION_TOKEN
               ValueFrom: !Sub "${SecretArn}:PUBSUB_VERIFICATION_TOKEN::"
+            - Name: DASHBOARD_PASSWORD
+              ValueFrom: !Sub "${SecretArn}:DASHBOARD_PASSWORD::"
           MountPoints:
             - SourceVolume: stats-data
               ContainerPath: /data
