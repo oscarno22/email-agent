@@ -19,6 +19,8 @@ multiple users later, but v1 is just for me.
 
 ## Architecture
 
+![Architecture diagram](architecture.png)
+
 ```
 Gmail Push → Pub/Sub → POST /webhook/pubsub
                           │
