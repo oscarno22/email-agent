@@ -2,6 +2,8 @@ import logging
 import os
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from agent.core.state import Category
 from agent.ingestion.gmail_client import apply_action, send_email
@@ -11,6 +13,38 @@ logger = logging.getLogger(__name__)
 
 _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
 _DAILY_DIGEST_LABEL = "Email Agent/Daily Digest"
+_EASTERN = ZoneInfo("America/New_York")
+
+
+def _event_line(e: dict[str, Any]) -> str:
+    """Render one processed email: time | category | conf | sender | subject → action."""
+    ts = e.get("ts") or ""
+    try:
+        when = datetime.fromisoformat(ts).astimezone(_EASTERN).strftime("%H:%M")
+    except ValueError:
+        when = ts[11:16] if len(ts) >= 16 else "??:??"
+
+    conf = e.get("confidence")
+    conf_str = f"{conf:.2f}" if conf is not None else " ?  "
+
+    parts = [
+        when,
+        (e.get("category") or "?"),
+        conf_str,
+        e.get("sender") or "",
+        e.get("subject") or "(no subject)",
+    ]
+    line = "  " + "  |  ".join(parts)
+
+    extras = []
+    if e.get("draft_created"):
+        extras.append("draft created")
+    notes = (e.get("action_notes") or "").strip()
+    if notes:
+        extras.append(notes)
+    if extras:
+        line += "   →   " + "; ".join(extras)
+    return line
 
 
 def main() -> None:
@@ -28,12 +62,17 @@ def main() -> None:
         f"Email Agent — Daily Digest ({yesterday})",
         f"Processed {len(entries)} email(s)",
         "",
+        "By category:",
     ]
     for cat, n in sorted(counts.items(), key=lambda x: -x[1]):
         lines.append(f"  {n:3d}  {cat}")
 
+    lines += ["", "All email (times in ET):"]
+    for e in entries:
+        lines.append(_event_line(e))
+
     if unknowns:
-        lines += ["", f"{len(unknowns)} unknown email(s) left for manual review:"]
+        lines += ["", f"{len(unknowns)} email(s) left for manual review:"]
         for e in unknowns:
             lines.append(f"  {e['sender']}  |  {e['subject']}")
 

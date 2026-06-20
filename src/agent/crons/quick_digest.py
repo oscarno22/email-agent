@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from agent.ingestion.gmail_client import apply_action, fetch_email, search_messages, send_email
-from agent.stats.db import get_category_for_gmail_id, kv_get, kv_set
+from agent.stats.db import get_event_for_gmail_id, kv_get, kv_set
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,19 @@ _CURSOR_KEY = "last_quick_digest_ts"
 _DEFAULT_WINDOW = timedelta(hours=3)
 _OVERLAP_BUFFER = timedelta(seconds=60)
 _EASTERN = ZoneInfo("America/New_York")
+
+
+def _action_summary(event: dict | None) -> str:
+    """Short description of what the agent did, from the stored event (best-effort)."""
+    if not event:
+        return ""
+    extras = []
+    if event.get("draft_created"):
+        extras.append("draft created")
+    notes = (event.get("action_notes") or "").strip()
+    if notes:
+        extras.append(notes)
+    return "; ".join(extras)
 
 
 def main() -> None:
@@ -35,37 +48,45 @@ def main() -> None:
     emails = []
     for msg_id in ids:
         email = fetch_email(msg_id)
-        category = None
+        event = None
         try:
-            category = get_category_for_gmail_id(msg_id)
+            event = get_event_for_gmail_id(msg_id)
         except Exception:
-            logger.warning("[quick_digest] category lookup failed for %s", msg_id, exc_info=True)
-        emails.append((email, category))
+            logger.warning("[quick_digest] event lookup failed for %s", msg_id, exc_info=True)
+        emails.append((email, event))
     emails.sort(key=lambda pair: pair[0].received_at)
 
-    if not emails:
-        logger.info("[quick_digest] no new mail since %s — nothing to send", last_run.isoformat())
-        kv_set(_CURSOR_KEY, str(int(now.timestamp())))
-        return
-
     now_et = now.astimezone(_EASTERN)
-    lines = [
-        f"Email Agent — Quick Digest ({now_et:%-I:%M %p ET})",
-        f"{len(emails)} new email(s) in your inbox:",
-        "",
-    ]
-    for email, category in emails:
-        received_et = email.received_at.astimezone(_EASTERN)
-        tag = f"   [{category}]" if category else ""
-        lines.append(f"  {received_et:%H:%M}  |  {email.sender}  |  {email.subject}{tag}")
+    subject = f"Email Agent — Quick Digest ({now_et:%-I:%M %p ET})"
+
+    if not emails:
+        # Always send an "all clear" so an empty run still confirms the cron is alive.
+        last_run_et = last_run.astimezone(_EASTERN)
+        subject += " — all clear"
+        lines = [
+            subject,
+            f"No new inbox mail since {last_run_et:%-I:%M %p ET}.",
+        ]
+        logger.info("[quick_digest] no new mail since %s — sending all-clear", last_run.isoformat())
+    else:
+        lines = [
+            subject,
+            f"{len(emails)} new email(s) in your inbox:",
+            "",
+        ]
+        for email, event in emails:
+            received_et = email.received_at.astimezone(_EASTERN)
+            category = event.get("category") if event else None
+            tag = f"   |   {category}" if category else ""
+            action = _action_summary(event)
+            outcome = f"   →   {action}" if action else ""
+            lines.append(
+                f"  {received_et:%H:%M}  |  {email.sender}  |  {email.subject}{tag}{outcome}"
+            )
 
     # Send first; only advance the cursor on success so a send failure re-covers
     # the window next run (bias toward duplicates over missed mail).
-    msg_id = send_email(
-        to=_DIGEST_TO,
-        subject=f"Email Agent — Quick Digest ({now_et:%-I:%M %p ET})",
-        body="\n".join(lines),
-    )
+    msg_id = send_email(to=_DIGEST_TO, subject=subject, body="\n".join(lines))
     kv_set(_CURSOR_KEY, str(int(now.timestamp())))
     logger.info("[quick_digest] sent %d email(s) to %s", len(emails), _DIGEST_TO)
 

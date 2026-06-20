@@ -193,7 +193,8 @@ def get_events_for_date(date: str) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT category, sender, subject
+            SELECT ts, sender, subject, category, confidence,
+                   action_notes, draft_created
             FROM email_events
             WHERE substr(ts, 1, 10) = ?
             ORDER BY ts
@@ -211,6 +212,26 @@ def get_category_for_gmail_id(gmail_id: str) -> str | None:
             (gmail_id,),
         ).fetchone()
         return row["category"] if row else None
+
+
+def get_event_for_gmail_id(gmail_id: str) -> dict[str, Any] | None:
+    """Return the most recent classifier event for a gmail_id, or None.
+
+    Includes what the agent did (category, action_notes, draft_created) so a
+    digest can show the outcome alongside the live Gmail message.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT category, confidence, action_notes, draft_created
+            FROM email_events
+            WHERE gmail_id = ?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (gmail_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_user_rules() -> list[dict[str, Any]]:
