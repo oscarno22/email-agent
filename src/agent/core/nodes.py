@@ -6,12 +6,19 @@ from agent.core.state import ActionPlan, Category, Email, Features, State, Trust
 from agent.stats.db import record_event
 from agent.stats.events import publish
 
-_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+# `or` (not getenv's default arg) so an env var that is present-but-empty — as it is
+# in production when the CloudFormation DigestToEmail param is unset — still falls back.
+_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"
+
+# Every label the agent applies lives under this parent so Gmail shows one tidy tree.
+_LABEL_PREFIX = "Email Agent/"
 
 
 def _is_own_digest(email: Email) -> bool:
     """The agent's own digest emails (sent self->self) — never draft a reply to these."""
-    return email.sender == _DIGEST_TO and email.subject.startswith("Email Agent")
+    return email.sender.strip().lower() == _DIGEST_TO.strip().lower() and email.subject.startswith(
+        "Email Agent"
+    )
 
 
 _CATEGORY_ACCENT = {
@@ -148,7 +155,7 @@ def action_newsletter(state: State) -> State:
     return _action(
         state,
         ActionPlan(
-            labels_to_apply=["Newsletters"],
+            labels_to_apply=[f"{_LABEL_PREFIX}Newsletters"],
             archive=True,
             notes="label=Newsletters, archive=true",
         ),
@@ -159,9 +166,9 @@ def action_receipt(state: State) -> State:
     return _action(
         state,
         ActionPlan(
-            labels_to_apply=["Receipts"],
-            archive=True,
-            notes="label=Receipts, archive=true",
+            labels_to_apply=[f"{_LABEL_PREFIX}Receipts"],
+            archive=False,
+            notes="label=Receipts, keep in inbox",
         ),
     )
 
@@ -170,7 +177,7 @@ def action_calendar(state: State) -> State:
     return _action(
         state,
         ActionPlan(
-            labels_to_apply=["Calendar"],
+            labels_to_apply=[f"{_LABEL_PREFIX}Calendar"],
             archive=False,
             notes="label=Calendar, keep in inbox",
         ),
@@ -186,7 +193,7 @@ def action_personal(state: State) -> State:
     return _action(
         state,
         ActionPlan(
-            labels_to_apply=["Personal"],
+            labels_to_apply=[f"{_LABEL_PREFIX}Personal"],
             archive=False,
             draft_reply=draft_reply,
             notes="label=Personal, keep in inbox" + (", draft=true" if draft_reply else ""),
@@ -203,7 +210,7 @@ def action_work(state: State) -> State:
     return _action(
         state,
         ActionPlan(
-            labels_to_apply=["Work"],
+            labels_to_apply=[f"{_LABEL_PREFIX}Work"],
             archive=False,
             draft_reply=draft_reply,
             notes="label=Work, keep in inbox" + (", draft=true" if draft_reply else ""),
@@ -215,7 +222,7 @@ def action_junk(state: State) -> State:
     return _action(
         state,
         ActionPlan(
-            labels_to_apply=["Junk"],
+            labels_to_apply=[f"{_LABEL_PREFIX}Junk"],
             archive=True,
             notes="label=Junk, archive=true",
         ),

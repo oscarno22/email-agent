@@ -12,7 +12,9 @@ from agent.stats.db import get_events_for_date
 
 logger = logging.getLogger(__name__)
 
-_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+# `or` (not getenv's default) so a present-but-empty env var still falls back — in
+# production DIGEST_TO_EMAIL is empty unless the CloudFormation param is set.
+_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"
 _DAILY_DIGEST_LABEL = "Email Agent/Daily Digest"
 _EASTERN = ZoneInfo("America/New_York")
 

@@ -9,7 +9,9 @@ from agent.stats.db import get_event_for_gmail_id, kv_get, kv_set
 
 logger = logging.getLogger(__name__)
 
-_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+# `or` (not getenv's default) so a present-but-empty env var still falls back — in
+# production DIGEST_TO_EMAIL is empty unless the CloudFormation param is set.
+_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"
 _QUICK_DIGEST_LABEL = "Email Agent/Quick Digest"
 _CURSOR_KEY = "last_quick_digest_ts"
 _DEFAULT_WINDOW = timedelta(hours=3)

@@ -260,7 +260,15 @@ def _get_label_id(name: str) -> str:
         return _label_id_cache[name]
     labels = get_service().users().labels().list(userId="me").execute().get("labels", [])
     by_name = {label["name"]: label["id"] for label in labels}
-    if name not in by_name:
+
+    # Ensure every ancestor exists first, so a nested label like
+    # "Email Agent/Newsletters" gets a real, collapsible "Email Agent" parent in
+    # Gmail rather than a synthetic name-only nesting. Create shallowest first.
+    segments = name.split("/")
+    for depth in range(1, len(segments) + 1):
+        ancestor = "/".join(segments[:depth])
+        if ancestor in by_name:
+            continue
         created = (
             get_service()
             .users()
@@ -268,14 +276,15 @@ def _get_label_id(name: str) -> str:
             .create(
                 userId="me",
                 body={
-                    "name": name,
+                    "name": ancestor,
                     "labelListVisibility": "labelShow",
                     "messageListVisibility": "show",
                 },
             )
             .execute()
         )
-        by_name[name] = created["id"]
+        by_name[ancestor] = created["id"]
+
     _label_id_cache[name] = by_name[name]
     return _label_id_cache[name]
 

@@ -40,7 +40,7 @@ Parameters:
 
   DigestToEmail:
     Type: String
-    Default: ""
+    Default: "oscarnolen@gmail.com"
 
   EnableCrons:
     Type: String

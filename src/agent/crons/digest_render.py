@@ -47,7 +47,7 @@ def _badge(category: str | None) -> str:
     cat = (category or "unknown").lower()
     return (
         f'<span style="display:inline-block;background:{_color(cat)};color:#ffffff;'
-        f"border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;"
+        f"border-radius:4px;padding:3px 9px;font-size:12px;font-weight:600;"
         f'text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;">'
         f"{_esc(cat)}</span>"
     )
@@ -80,41 +80,42 @@ def _entry_action(e: dict[str, Any]) -> str:
     return "; ".join(extras)
 
 
-# --- table ---------------------------------------------------------------
+# --- cards ----------------------------------------------------------------
+#
+# A single-column stack of per-email cards rather than a wide multi-column table:
+# each card reflows to the screen width, so it stays readable on phones with no
+# horizontal scroll. The cards live inside one <mj-text> (full width, no MJML
+# column math). The badge + time share one row via a 100%-width inner table so
+# they stay on a line together; everything else stacks vertically.
 
-_TD = "padding:9px 8px;font-size:13px;border-bottom:1px solid #eef0f4;vertical-align:top;"
-_TH = (
-    "padding:6px 8px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;"
-    "color:#9ca3af;text-align:left;border-bottom:2px solid #eef0f4;"
-)
 
-
-def _row(r: dict[str, Any]) -> str:
+def _card(r: dict[str, Any]) -> str:
     action = _esc(r.get("action"))
-    action_cell = f'<span style="color:#6b7280;">{action}</span>' if action else ""
+    action_line = (
+        f'<div style="color:#6b7280;font-size:13px;margin-top:4px;'
+        f'word-break:break-word;">&#8594; {action}</div>'
+        if action
+        else ""
+    )
     return (
-        "<tr>"
-        f'<td style="{_TD}color:#6b7280;white-space:nowrap;">{_esc(r.get("time"))}</td>'
-        f'<td style="{_TD}">{_badge(r.get("category"))}</td>'
-        f'<td style="{_TD}color:#374151;">{_esc(r.get("sender"))}</td>'
-        f'<td style="{_TD}color:#111827;font-weight:500;">{_esc(r.get("subject"))}</td>'
-        f'<td style="{_TD}font-size:12px;">{action_cell}</td>'
-        "</tr>"
+        '<div style="padding:12px 0;border-bottom:1px solid #eef0f4;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        ' style="width:100%;border-collapse:collapse;"><tr>'
+        f'<td style="text-align:left;vertical-align:middle;">{_badge(r.get("category"))}</td>'
+        '<td style="text-align:right;vertical-align:middle;color:#6b7280;'
+        f'font-size:13px;white-space:nowrap;">{_esc(r.get("time"))}</td>'
+        "</tr></table>"
+        f'<div style="color:#374151;font-size:13px;margin-top:6px;'
+        f'word-break:break-word;">{_esc(r.get("sender"))}</div>'
+        f'<div style="color:#111827;font-size:15px;font-weight:600;margin-top:2px;'
+        f'word-break:break-word;">{_esc(r.get("subject"))}</div>'
+        f"{action_line}"
+        "</div>"
     )
 
 
-def _table(rows: list[dict[str, Any]]) -> str:
-    header = (
-        "<tr>"
-        f'<th style="{_TH}">Time</th>'
-        f'<th style="{_TH}">Category</th>'
-        f'<th style="{_TH}">Sender</th>'
-        f'<th style="{_TH}">Subject</th>'
-        f'<th style="{_TH}">Action</th>'
-        "</tr>"
-    )
-    body = "".join(_row(r) for r in rows)
-    return f'<mj-table cellpadding="0" cellspacing="0" font-size="13px">{header}{body}</mj-table>'
+def _cards(rows: list[dict[str, Any]]) -> str:
+    return f'<mj-text padding="0">{"".join(_card(r) for r in rows)}</mj-text>'
 
 
 # --- document wrapper ----------------------------------------------------
@@ -130,12 +131,12 @@ def _document(title: str, subtitle: str, sections: str) -> str:
     </mj-attributes>
     <mj-preview>{_esc(subtitle)}</mj-preview>
   </mj-head>
-  <mj-body background-color="#f4f5f7">
-    <mj-section padding="24px 24px 4px 24px">
+  <mj-body background-color="#f4f5f7" width="600px">
+    <mj-section padding="20px 16px 4px 16px">
       <mj-column>
         <mj-text font-size="22px" font-weight="700" color="#111827"
                  padding="0">{_esc(title)}</mj-text>
-        <mj-text font-size="13px" color="#6b7280" padding="4px 0 0 0">{_esc(subtitle)}</mj-text>
+        <mj-text font-size="14px" color="#6b7280" padding="4px 0 0 0">{_esc(subtitle)}</mj-text>
       </mj-column>
     </mj-section>
     {sections}
@@ -168,31 +169,35 @@ def render_daily_digest(
     ]
 
     sections = f"""
-    <mj-section padding="8px 24px 0 24px">
+    <mj-section padding="8px 16px 0 16px">
       <mj-column>
         <mj-text padding="0">{chips}</mj-text>
       </mj-column>
     </mj-section>
-    <mj-section background-color="#ffffff" border-radius="8px" padding="8px 16px" css-class="card">
+    <mj-section background-color="#ffffff" border-radius="8px" padding="4px 16px" css-class="card">
       <mj-column>
-        {_table(rows)}
+        {_cards(rows)}
       </mj-column>
     </mj-section>
 """
 
     if unknowns:
         items = "".join(
-            f'<tr><td style="{_TD}color:#374151;">{_esc(e.get("sender"))}</td>'
-            f'<td style="{_TD}color:#111827;">{_esc(e.get("subject") or "(no subject)")}</td></tr>'
+            '<div style="padding:8px 0;border-bottom:1px solid #eef0f4;">'
+            f'<div style="color:#374151;font-size:13px;word-break:break-word;">'
+            f"{_esc(e.get('sender'))}</div>"
+            f'<div style="color:#111827;font-size:14px;word-break:break-word;">'
+            f"{_esc(e.get('subject') or '(no subject)')}</div>"
+            "</div>"
             for e in unknowns
         )
         sections += f"""
-    <mj-section padding="16px 24px 0 24px">
+    <mj-section padding="16px 16px 0 16px">
       <mj-column>
         <mj-text font-size="14px" font-weight="600" color="#b91c1c" padding="0 0 8px 0">
           {len(unknowns)} email(s) left for manual review
         </mj-text>
-        <mj-table cellpadding="0" cellspacing="0" font-size="13px">{items}</mj-table>
+        <mj-text padding="0">{items}</mj-text>
       </mj-column>
     </mj-section>
 """
@@ -209,17 +214,17 @@ def render_quick_digest(rows: list[dict[str, Any]], *, subtitle: str) -> str:
     """
     if rows:
         sections = f"""
-    <mj-section background-color="#ffffff" border-radius="8px" padding="8px 16px">
+    <mj-section background-color="#ffffff" border-radius="8px" padding="4px 16px">
       <mj-column>
-        {_table(rows)}
+        {_cards(rows)}
       </mj-column>
     </mj-section>
 """
     else:
         sections = """
-    <mj-section padding="8px 24px 0 24px">
+    <mj-section padding="8px 16px 0 16px">
       <mj-column>
-        <mj-text font-size="14px" color="#16a34a" padding="0">
+        <mj-text font-size="15px" color="#16a34a" padding="0">
           ✓ All clear — nothing new in your inbox.
         </mj-text>
       </mj-column>
