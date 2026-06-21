@@ -10,6 +10,9 @@ class Category(StrEnum):
     CALENDAR = "calendar"
     PERSONAL = "personal"
     WORK = "work"
+    BANKING = "banking"
+    APPLICATION = "application"
+    ASSESSMENT = "assessment"
     JUNK = "junk"
     UNKNOWN = "unknown"
 

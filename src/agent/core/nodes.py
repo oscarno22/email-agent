@@ -10,8 +10,11 @@ from agent.stats.events import publish
 # in production when the CloudFormation DigestToEmail param is unset — still falls back.
 _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"
 
-# Every label the agent applies lives under this parent so Gmail shows one tidy tree.
-_LABEL_PREFIX = "Email Agent/"
+# Category labels are top-level (no parent prefix) so they coexist with — and reuse —
+# labels you already manage by hand (e.g. "Banking", "Applications/Assessments") instead
+# of the agent creating a duplicate nested copy. Only the digests and the agent's own
+# operational labels (Needs Review, Alerts) stay under the "Email Agent/" parent.
+_LABEL_PREFIX = ""
 
 
 def _is_own_digest(email: Email) -> bool:
@@ -27,6 +30,9 @@ _CATEGORY_ACCENT = {
     "calendar": "#fd9b6b",
     "personal": "#3ec48f",
     "work": "#3ec4c4",
+    "banking": "#c9a227",
+    "application": "#5b8def",
+    "assessment": "#a76bfd",
     "junk": "#d35d6e",
     "unknown": "#9aa0a6",
 }
@@ -218,6 +224,45 @@ def action_work(state: State) -> State:
     )
 
 
+def action_banking(state: State) -> State:
+    return _action(
+        state,
+        ActionPlan(
+            labels_to_apply=[f"{_LABEL_PREFIX}Banking"],
+            archive=False,
+            notes="label=Banking, keep in inbox",
+        ),
+    )
+
+
+def action_application(state: State) -> State:
+    draft_reply = None
+    if state.trust_phase == TrustPhase.DRAFT and not _is_own_digest(state.email):
+        from agent.core.drafter import generate_draft
+
+        draft_reply = generate_draft(state.email)
+    return _action(
+        state,
+        ActionPlan(
+            labels_to_apply=[f"{_LABEL_PREFIX}Applications"],
+            archive=False,
+            draft_reply=draft_reply,
+            notes="label=Applications, keep in inbox" + (", draft=true" if draft_reply else ""),
+        ),
+    )
+
+
+def action_assessment(state: State) -> State:
+    return _action(
+        state,
+        ActionPlan(
+            labels_to_apply=[f"{_LABEL_PREFIX}Applications/Assessments"],
+            archive=False,
+            notes="label=Applications/Assessments, keep in inbox",
+        ),
+    )
+
+
 def action_junk(state: State) -> State:
     return _action(
         state,
@@ -242,6 +287,9 @@ CATEGORY_NODES = {
     Category.CALENDAR.value: ("action_calendar", action_calendar),
     Category.PERSONAL.value: ("action_personal", action_personal),
     Category.WORK.value: ("action_work", action_work),
+    Category.BANKING.value: ("action_banking", action_banking),
+    Category.APPLICATION.value: ("action_application", action_application),
+    Category.ASSESSMENT.value: ("action_assessment", action_assessment),
     Category.JUNK.value: ("action_junk", action_junk),
     Category.UNKNOWN.value: ("action_unknown", action_unknown),
 }

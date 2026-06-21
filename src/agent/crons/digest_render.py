@@ -29,6 +29,9 @@ _CATEGORY_COLORS = {
     "receipt": "#d97706",
     "newsletter": "#7c3aed",
     "calendar": "#0891b2",
+    "banking": "#b8860b",
+    "application": "#1d4ed8",
+    "assessment": "#7e22ce",
     "junk": "#6b7280",
     "unknown": "#dc2626",
 }

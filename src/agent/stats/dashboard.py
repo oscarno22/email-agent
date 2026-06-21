@@ -318,6 +318,9 @@ _INDEX_HTML = """<!doctype html>
           <option value="calendar">calendar</option>
           <option value="personal">personal</option>
           <option value="work">work</option>
+          <option value="banking">banking</option>
+          <option value="application">application</option>
+          <option value="assessment">assessment</option>
           <option value="junk">junk</option>
         </select>
       </div>

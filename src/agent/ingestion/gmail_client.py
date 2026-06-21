@@ -262,8 +262,10 @@ def _get_label_id(name: str) -> str:
     by_name = {label["name"]: label["id"] for label in labels}
 
     # Ensure every ancestor exists first, so a nested label like
-    # "Email Agent/Newsletters" gets a real, collapsible "Email Agent" parent in
-    # Gmail rather than a synthetic name-only nesting. Create shallowest first.
+    # "Email Agent/Daily Digest" or "Applications/Assessments" gets a real, collapsible
+    # parent in Gmail rather than a synthetic name-only nesting. Existing labels (created
+    # by hand or by a prior run) are reused by exact name; only missing ones are created.
+    # Create shallowest first.
     segments = name.split("/")
     for depth in range(1, len(segments) + 1):
         ancestor = "/".join(segments[:depth])
