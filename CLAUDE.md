@@ -28,18 +28,18 @@ make renew-watch # renew 7-day Gmail watch (operationally critical — expires s
 make refresh-token # regenerate the Gmail OAuth refresh token (browser flow)
 make digest      # run daily digest once manually
 make quick-digest # run quick digest once manually (live Gmail list of new inbox mail)
-make smoke       # run graph against fixture emails (requires ANTHROPIC_API_KEY)
+make smoke       # run graph against fixture emails (requires ANTHROPIC_API_KEY or GEMINI_API_KEY)
 ```
 
 Crons are no longer registered with a separate command — they run in-process via APScheduler when `ENABLE_CRONS=true` (see below).
 
-No test suite yet — `pytest` is in dev deps but unused.
+Tests live in `src/agent/tests/` (run with `uv run pytest` from `src/agent/`). Coverage is partial — classifier + node-graph plumbing only.
 
 ## Layout & paths that trip people up
 
 - The `uv` project root is **`src/agent/`** (its own `pyproject.toml`, `.venv`, `uv.lock`). Run `uv` commands from there, not the repo root.
 - `make start` runs `uvicorn agent.ingestion.webapp:app` from `src/agent`.
-- `.env` lives at **`src/.env`** (loaded via `load_dotenv()` in `webapp.py`), not the repo root. See `src/.env.example` for all required vars. At minimum: `ANTHROPIC_API_KEY`, `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE`, and `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN`. The app raises at startup if no Gmail credentials are found. `src/token.json` and `src/credentials.json` are deleted — env vars are now required everywhere.
+- `.env` lives at **`src/.env`** (loaded via `load_dotenv()` in `webapp.py`), not the repo root. See `src/.env.example` for all required vars. At minimum: `ANTHROPIC_API_KEY` (or `GEMINI_API_KEY` — see LLM section), `PUBSUB_VERIFICATION_TOKEN`, `TRUST_PHASE`, and `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN`. The app raises at startup if no Gmail credentials are found. `src/token.json` and `src/credentials.json` are deleted — env vars are now required everywhere.
 - **`DIGEST_TO_EMAIL` gotcha**: the digest recipient is resolved as `os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"` (note: `or`, **not** `getenv`'s default arg) in `core/nodes.py`, `crons/digest.py`, `crons/quick_digest.py`. The CloudFormation `DigestToEmail` param sets this env var; when it was empty the container ran with `DIGEST_TO_EMAIL=""`, which a `getenv(key, default)` does **not** override (the default only applies when the key is absent). That empty value silently broke *both* scheduled digest sends (`send_email(to="")` → HTTP 400) and the own-digest self-reply guard (`_is_own_digest`'s `sender == _DIGEST_TO` compared against `""`). The `or` form fixes both.
 - `LANGSMITH_*` keys are optional tracing.
 - Python is pinned to `>=3.12, <3.13`.
@@ -50,7 +50,7 @@ No test suite yet — `pytest` is in dev deps but unused.
 
 | Subpackage | What it contains |
 |---|---|
-| `core/` | Graph pipeline (langgraph `StateGraph` DSL) — `state`, `graph`, `nodes`, `classifier`, `drafter`, `rules` |
+| `core/` | Graph pipeline (langgraph `StateGraph` DSL) — `state`, `graph`, `nodes`, `classifier`, `drafter`, `rules`, `llm` (provider abstraction + Anthropic/Gemini fallback) |
 | `ingestion/` | Email delivery — `gmail_client` (OAuth + API wrapper), `webapp` (FastAPI app: webhook + worker queue + scheduler + dashboard routes), `batch_review` (bulk inbox processing) |
 | `crons/` | Scheduled tasks — `digest` (daily summary), `quick_digest` (every-3h live Gmail list of new inbox mail; AI-independent), `digest_render` (shared MJML→HTML rendering for both digests), `renew_watch` (all expose `main()`, called by APScheduler and runnable manually) |
 | `stats/` | Persistence & UI — `db` (SQLite), `events` (SSE bus), `backfill`, `dashboard` (APIRouter + standalone app) |
@@ -67,8 +67,9 @@ START → extract_features → classify → [route by category] → action_<cate
 ```
 
 - **`extract_features`** (`core/nodes.py`): cheap deterministic signals (unsubscribe markers, links, sender-domain check). No LLM.
-- **`classify`** (`core/classifier.py`): forced tool use on `classify_email`. **Two-tier cost strategy**: Haiku first; if `confidence < 0.6`, escalate to Sonnet and mark `needs_escalation=True`. The category enum exposed to the model excludes `UNKNOWN` — `UNKNOWN` is reserved for code paths the model can't pick.
-- **AI-failure fallback**: classification fails before any Gmail mutation, so when the Anthropic call raises `APIError` (token expiry being the main risk), the worker (`ingestion/webapp.py`) leaves the email untouched, files it under `Email Agent/Needs Review`, and emails a throttled alert (≤1/hour, `kv_store` key `last_ai_alert_ts`). Labeling + alert are best-effort and never crash the worker. Gmail-token failure is separate (logged loudly by `_gmail_call`).
+- **`classify`** (`core/classifier.py`): forced tool use on `classify_email`. **Two-tier cost strategy**: `Tier.FAST` first; if `confidence < 0.6`, escalate to `Tier.DEEP` and mark `needs_escalation=True`. Tiers map to concrete models inside `core/llm.py` (`FAST`→Haiku/Gemini Flash, `DEEP`→Sonnet/Gemini Flash). The category enum exposed to the model excludes `UNKNOWN` — `UNKNOWN` is reserved for code paths the model can't pick.
+- **LLM provider abstraction** (`core/llm.py`): both `classify` and `generate_draft` go through `get_provider()`, which returns a `Provider` (`structured_completion` for forced-tool output, `text_completion` for prose). The factory composes providers from env keys: both `ANTHROPIC_API_KEY` + `GEMINI_API_KEY` present → `FallbackProvider(AnthropicProvider, GeminiProvider)` (Anthropic primary, Gemini auto-fallback on any `LLMError`); only one key → that provider alone; neither → raises `LLMError` at first use. Gemini uses `gemini-2.5-flash` for both tiers via the `google-genai` SDK; its JSON-schema response uses the same `CLASSIFY_TOOL` schema (numeric `minimum`/`maximum` keys are stripped — Gemini's response_schema is an OpenAPI-3 subset). The factory is `@lru_cache(maxsize=1)`; tests `patch("agent.core.classifier.get_provider")`.
+- **AI-failure fallback**: classification fails before any Gmail mutation, so when **every** configured provider raises (surfaced as `LLMError`), the worker (`ingestion/webapp.py`) leaves the email untouched, files it under `Email Agent/Needs Review`, and emails a throttled alert (≤1/hour, `kv_store` key `last_ai_alert_ts`). With the Gemini fallback this only fires when Anthropic *and* Gemini both fail. Labeling + alert are best-effort and never crash the worker. Gmail-token failure is separate (logged loudly by `_gmail_call`).
 - **Conditional routing**: `route_by_category` returns the category string; `CATEGORY_NODES` (a dict in `core/nodes.py`) maps each `Category` value to its action node. To add a category: add to the `Category` enum, add an entry to `CATEGORY_NODES`, write the action function. The graph wiring picks it up automatically.
 - **Action nodes**: each builds an `ActionPlan` and calls `_action()`. **`_action()` enforces the trust gradient**: in `TrustPhase.SHADOW`, it rewrites the plan's notes to `[shadow] would: …` so nothing actually fires. Real Gmail mutations would gate on `trust_phase` here. After acting, `_append_action_log` records to SQLite via `record_event` and emits a live event over the in-process SSE bus via `events.publish()` — no JSONL file is written. (The old LangGraph `push_ui_message` generative-UI channel was removed with the server.)
 - **Label hierarchy**: **category labels are top-level** (`_LABEL_PREFIX = ""` in `core/nodes.py`) — `Newsletters`, `Receipts`, `Calendar`, `Personal`, `Work`, `Banking`, `Applications`, `Applications/Assessments`, `Junk` — so they coexist with and *reuse* labels you already manage by hand instead of the agent creating a duplicate nested copy. Only the agent's own machinery stays under the `Email Agent/` parent: the digests (`Email Agent/Daily Digest`, `…/Quick Digest`) and operational labels (`Email Agent/Needs Review`, `…/Alerts`). `_get_label_id` (`ingestion/gmail_client.py`) reuses an existing label by **exact name** and otherwise creates it, building each missing ancestor segment first so a nested parent is a real, collapsible Gmail label rather than a synthetic name-only nesting. **Archive vs. label are independent**: archiving only removes the `INBOX` label (`apply_action`), so an archived email is still fully accessible under its category label; nothing is ever deleted. Only newsletter and junk archive; every other category (receipt/calendar/personal/work/banking/application/assessment) stays in the inbox.

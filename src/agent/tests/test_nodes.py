@@ -133,10 +133,12 @@ def test_action_newsletter_shadow_notes(mock_pub, mock_rec):
 
 @patch("agent.core.nodes.record_event")
 @patch("agent.core.nodes.publish")
-def test_action_receipt_shadow_archives(mock_pub, mock_rec):
+def test_action_receipt_shadow_stays_in_inbox(mock_pub, mock_rec):
     result = action_receipt(_classified(Category.RECEIPT))
     assert "[shadow]" in result.action.notes
-    assert result.action.archive is True
+    # Only newsletter and junk archive; receipts stay in the inbox under their label.
+    assert result.action.archive is False
+    assert "Receipts" in result.action.labels_to_apply
 
 
 @patch("agent.core.nodes.record_event")

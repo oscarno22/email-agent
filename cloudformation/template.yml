@@ -185,6 +185,8 @@ Resources:
           Secrets:
             - Name: ANTHROPIC_API_KEY
               ValueFrom: !Sub "${SecretArn}:ANTHROPIC_API_KEY::"
+            - Name: GEMINI_API_KEY
+              ValueFrom: !Sub "${SecretArn}:GEMINI_API_KEY::"
             - Name: GMAIL_CLIENT_ID
               ValueFrom: !Sub "${SecretArn}:GMAIL_CLIENT_ID::"
             - Name: GMAIL_CLIENT_SECRET

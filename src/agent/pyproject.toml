@@ -15,6 +15,7 @@ description = "Email Agent"
 requires-python = ">=3.12, <3.13"
 dependencies = [
     "anthropic>=0.40.0",
+    "google-genai>=1.0.0",
     "langgraph>=1.2.4",
     "google-auth-oauthlib>=1.2.0",
     "google-api-python-client>=2.100.0",

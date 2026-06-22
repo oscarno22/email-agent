@@ -1,8 +1,6 @@
 import logging
-import os
 
-from anthropic import Anthropic, APIError
-
+from agent.core.llm import LLMError, Tier, get_provider
 from agent.core.rules import DEFAULT_RULES
 from agent.core.state import Category, Classification
 
@@ -60,65 +58,51 @@ Subject: {subject}
 </email>"""
 
 
-def _parse_tool_use(response) -> Classification:
-    for block in response.content:
-        if block.type == "tool_use" and block.name == "classify_email":
-            data = block.input
-            return Classification(
-                category=Category(data["category"]),
-                confidence=float(data["confidence"]),
-                reasoning=data["reasoning"],
-            )
-    raise ValueError(f"Model did not call classify_email: {response.content!r}")
-
-
 def classify(
     sender: str,
     subject: str,
     body_excerpt: str,
     rules: str = DEFAULT_RULES,
-    client: Anthropic | None = None,
 ) -> Classification:
-    client = client or Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    provider = get_provider()
+    user_msg = _build_user_message(rules, sender, subject, body_excerpt)
 
-    def _call(model: str) -> Classification:
+    def _call(tier: Tier) -> Classification:
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=400,
+            data = provider.structured_completion(
+                tier=tier,
                 system=SYSTEM_PROMPT,
-                tools=[CLASSIFY_TOOL],
-                tool_choice={"type": "tool", "name": "classify_email"},
-                messages=[
-                    {
-                        "role": "user",
-                        "content": _build_user_message(rules, sender, subject, body_excerpt),
-                    }
-                ],
+                user=user_msg,
+                tool_name=CLASSIFY_TOOL["name"],
+                tool_description=CLASSIFY_TOOL["description"],
+                tool_schema=CLASSIFY_TOOL["input_schema"],
             )
-        except APIError as exc:
-            logger.error("[classify] Anthropic API error (model=%s): %s", model, exc)
+        except LLMError as exc:
+            logger.error("[classify] LLM call failed (tier=%s): %s", tier.value, exc)
             raise
-        result = _parse_tool_use(response)
+        result = Classification(
+            category=Category(data["category"]),
+            confidence=float(data["confidence"]),
+            reasoning=data["reasoning"],
+        )
         logger.info(
-            "[classify] model=%s category=%s confidence=%.2f",
-            model,
+            "[classify] tier=%s category=%s confidence=%.2f",
+            tier.value,
             result.category.value,
             result.confidence,
         )
         return result
 
-    first = _call(HAIKU)
+    first = _call(Tier.FAST)
     if first.confidence >= CONFIDENCE_ESCALATION_THRESHOLD:
         return first
 
     logger.info(
-        "[classify] confidence %.2f < %.2f — escalating to %s",
+        "[classify] confidence %.2f < %.2f — escalating to DEEP tier",
         first.confidence,
         CONFIDENCE_ESCALATION_THRESHOLD,
-        SONNET,
     )
-    escalated = _call(SONNET)
+    escalated = _call(Tier.DEEP)
     escalated.needs_escalation = True
     return escalated
 

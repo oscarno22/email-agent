@@ -8,11 +8,11 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
 
-from anthropic import APIError
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request, Response
 
 from agent.core.graph import graph
+from agent.core.llm import LLMError
 from agent.core.state import Email, State, TrustPhase
 from agent.crons import digest, quick_digest, renew_watch
 from agent.ingestion import runtime_state
@@ -64,9 +64,10 @@ _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
 _TRUST_PHASE = TrustPhase(os.getenv("TRUST_PHASE", "draft"))
 _ENABLE_CRONS = os.getenv("ENABLE_CRONS", "false").lower() == "true"
 
-# AI-failure fallback (Anthropic token expiry / outage). On a classification
-# failure the email is left untouched and filed under a review label; an alert is
-# emailed at most once an hour so an outage doesn't spam one message per email.
+# AI-failure fallback. Reached only when *every* configured provider fails
+# (e.g. Anthropic credits exhausted AND Gemini quota/key bad). On failure the
+# email is left untouched and filed under a review label; an alert is emailed
+# at most once an hour so an outage doesn't spam one message per email.
 _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
 _AI_FAILURE_LABEL = "Email Agent/Needs Review"
 _AI_ALERT_LABEL = "Email Agent/Alerts"
@@ -100,13 +101,14 @@ def _handle_ai_failure(email: Email, exc: Exception) -> None:
         if last and now - int(last) < _AI_ALERT_THROTTLE:
             return
         body = (
-            "Email Agent could not classify incoming mail — the AI call failed.\n\n"
-            "Most likely cause: ANTHROPIC_API_KEY is expired/invalid, or the Anthropic "
-            "API is temporarily unavailable.\n\n"
+            "Email Agent could not classify incoming mail — every configured LLM "
+            "provider failed.\n\n"
+            "Most likely causes: ANTHROPIC_API_KEY is expired/invalid AND "
+            "GEMINI_API_KEY is missing/exhausted (or both APIs are down at once).\n\n"
             f"Error: {exc}\n\n"
             f"Affected emails are left untouched in your inbox under "
             f"'{_AI_FAILURE_LABEL}' for manual review. Classification resumes "
-            "automatically once the key is fixed."
+            "automatically once at least one provider key is fixed."
         )
         msg_id = send_email(
             to=_DIGEST_TO,
@@ -129,7 +131,7 @@ async def _worker() -> None:
             await graph.ainvoke(State(email=email, trust_phase=_TRUST_PHASE))
             runtime_state.touch_email_processed()
             runtime_state.mark_ai_ok()
-        except APIError as exc:
+        except LLMError as exc:
             logger.error(
                 "[worker] AI classification failed for gmail_id=%s from=%s — %s",
                 email.gmail_id,
