@@ -131,17 +131,25 @@ def route_by_category(state: State) -> str:
 
 
 def _action(state: State, plan: ActionPlan) -> State:
-    if state.trust_phase == TrustPhase.SHADOW:
+    phase = state.trust_phase
+    if phase == TrustPhase.SHADOW:
+        # Observe only — never touch Gmail; record what we *would* have done.
         plan = plan.model_copy(update={"notes": f"[shadow] would: {plan.notes}"})
-    elif state.trust_phase == TrustPhase.LABEL:
+    elif phase == TrustPhase.LABEL:
+        # Labels only — force the message to stay in the inbox so nothing
+        # disappears while we're still building trust in the classifier.
+        from agent.ingestion.gmail_client import apply_action
+
+        apply_action(state.email.gmail_id, plan.labels_to_apply, archive=False)
+    elif phase in (TrustPhase.ARCHIVE, TrustPhase.DRAFT):
+        # Trusted to declutter: apply labels and honor the plan's archive
+        # decision. DRAFT additionally writes a reply draft when one was planned.
         from agent.ingestion.gmail_client import apply_action
 
         apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
-    elif state.trust_phase == TrustPhase.DRAFT:
-        from agent.ingestion.gmail_client import apply_action, create_draft
+        if phase == TrustPhase.DRAFT and plan.draft_reply:
+            from agent.ingestion.gmail_client import create_draft
 
-        apply_action(state.email.gmail_id, plan.labels_to_apply, plan.archive)
-        if plan.draft_reply:
             create_draft(
                 thread_id=state.email.thread_id,
                 to=state.email.sender,

@@ -10,6 +10,7 @@ from agent.core.nodes import (
     action_calendar,
     action_junk,
     action_newsletter,
+    action_personal,
     action_receipt,
     action_unknown,
     extract_features,
@@ -181,3 +182,86 @@ def test_shadow_mode_never_calls_gmail(mock_pub, mock_rec):
     with patch("agent.ingestion.gmail_client.apply_action") as mock_apply:
         action_newsletter(_classified(Category.NEWSLETTER, TrustPhase.SHADOW))
         mock_apply.assert_not_called()
+
+
+# ── trust gradient: which Gmail mutations fire per phase ─────────────────────
+#
+#   shadow  → no Gmail calls
+#   label   → labels only, never archives (message stays in inbox)
+#   archive → labels + honor the plan's archive decision
+#   draft   → labels + archive + create_draft when a reply was planned
+
+
+def _archive_arg(mock_apply):
+    """apply_action(message_id, labels, archive) — read archive positionally or by kw."""
+    args, kwargs = mock_apply.call_args
+    return kwargs["archive"] if "archive" in kwargs else args[2]
+
+
+@patch("agent.core.nodes.record_event")
+@patch("agent.core.nodes.publish")
+def test_label_phase_labels_only_never_archives(mock_pub, mock_rec):
+    # Newsletter plans archive=True, but the LABEL phase must keep it in the inbox.
+    with patch("agent.ingestion.gmail_client.apply_action") as mock_apply:
+        action_newsletter(_classified(Category.NEWSLETTER, TrustPhase.LABEL))
+        mock_apply.assert_called_once()
+        assert _archive_arg(mock_apply) is False
+
+
+@patch("agent.core.nodes.record_event")
+@patch("agent.core.nodes.publish")
+def test_archive_phase_honors_plan_archive_true(mock_pub, mock_rec):
+    with patch("agent.ingestion.gmail_client.apply_action") as mock_apply:
+        action_newsletter(_classified(Category.NEWSLETTER, TrustPhase.ARCHIVE))
+        mock_apply.assert_called_once()
+        assert _archive_arg(mock_apply) is True
+
+
+@patch("agent.core.nodes.record_event")
+@patch("agent.core.nodes.publish")
+def test_archive_phase_honors_plan_archive_false(mock_pub, mock_rec):
+    # Receipts plan archive=False — they stay in the inbox even at the archive phase.
+    with patch("agent.ingestion.gmail_client.apply_action") as mock_apply:
+        action_receipt(_classified(Category.RECEIPT, TrustPhase.ARCHIVE))
+        mock_apply.assert_called_once()
+        assert _archive_arg(mock_apply) is False
+
+
+@patch("agent.core.nodes.record_event")
+@patch("agent.core.nodes.publish")
+def test_archive_phase_never_drafts(mock_pub, mock_rec):
+    # ARCHIVE is one rung below DRAFT: it archives but must not create drafts.
+    with (
+        patch("agent.ingestion.gmail_client.apply_action") as mock_apply,
+        patch("agent.ingestion.gmail_client.create_draft") as mock_draft,
+    ):
+        action_personal(_classified(Category.PERSONAL, TrustPhase.ARCHIVE))
+        mock_apply.assert_called_once()
+        mock_draft.assert_not_called()
+
+
+@patch("agent.core.nodes.record_event")
+@patch("agent.core.nodes.publish")
+def test_draft_phase_creates_draft(mock_pub, mock_rec):
+    with (
+        patch("agent.core.drafter.generate_draft", return_value="Sounds good!"),
+        patch("agent.ingestion.gmail_client.apply_action") as mock_apply,
+        patch("agent.ingestion.gmail_client.create_draft") as mock_draft,
+    ):
+        action_personal(_classified(Category.PERSONAL, TrustPhase.DRAFT))
+        mock_apply.assert_called_once()
+        mock_draft.assert_called_once()
+
+
+@patch("agent.core.nodes.record_event")
+@patch("agent.core.nodes.publish")
+def test_draft_phase_without_planned_reply_skips_draft(mock_pub, mock_rec):
+    # Newsletters never plan a reply, so even in DRAFT no draft is created.
+    with (
+        patch("agent.ingestion.gmail_client.apply_action") as mock_apply,
+        patch("agent.ingestion.gmail_client.create_draft") as mock_draft,
+    ):
+        action_newsletter(_classified(Category.NEWSLETTER, TrustPhase.DRAFT))
+        mock_apply.assert_called_once()
+        assert _archive_arg(mock_apply) is True
+        mock_draft.assert_not_called()

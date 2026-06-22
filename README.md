@@ -70,11 +70,12 @@ Actions are gated behind an explicit trust phase the user opts into. Set via
 the `TRUST_PHASE` env var:
 
 1. **shadow** — log the plan, do nothing
-2. **label** — apply Gmail labels
-3. **archive** — label + archive out of inbox *(folded into `label`/`draft` plans)*
-4. **draft** — generate draft replies for human review *(current default in `webapp.py`)*
+2. **label** — apply Gmail labels only; the message stays in the inbox
+3. **archive** — labels + archive out of the inbox (honors each plan's archive flag)
+4. **draft** — archive behavior + generate draft replies for human review *(current default in `webapp.py`)*
 
-Higher phases are not enabled by default and never will be — graduating happens
+Each phase is cumulative — it adds one capability over the one before it. Higher
+phases are not enabled by default and never will be — graduating happens
 per-user, by choice.
 
 ## Quickstart
