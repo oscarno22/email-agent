@@ -100,7 +100,7 @@ async def api_batch_review(request: Request, background_tasks: BackgroundTasks) 
 
     # Clamp to the deployment's configured ceiling so an authenticated request
     # can't run a more privileged action than the process is meant to perform.
-    ceiling = TrustPhase(os.getenv("TRUST_PHASE", "draft"))
+    ceiling = TrustPhase(os.getenv("TRUST_PHASE", "label"))
     if _PHASE_RANK[trust_phase] > _PHASE_RANK[ceiling]:
         logger.warning(
             "[batch-review] clamping requested trust_phase=%s to ceiling=%s",

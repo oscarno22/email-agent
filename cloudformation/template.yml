@@ -35,7 +35,7 @@ Parameters:
 
   TrustPhase:
     Type: String
-    Default: draft
+    Default: label
     AllowedValues: [shadow, label, archive, draft]
 
   DigestToEmail:

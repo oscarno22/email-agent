@@ -17,8 +17,12 @@ _DIGEST_TO = os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"
 _LABEL_PREFIX = ""
 
 
-def _is_own_digest(email: Email) -> bool:
-    """The agent's own digest emails (sent self->self) — never draft a reply to these."""
+def is_own_digest(email: Email) -> bool:
+    """The agent's own digest emails (sent self->self).
+
+    Never draft a reply to these; the webhook worker also skips classifying them
+    and just archives them on arrival (the send-time archive can race delivery).
+    """
     return email.sender.strip().lower() == _DIGEST_TO.strip().lower() and email.subject.startswith(
         "Email Agent"
     )
@@ -200,7 +204,7 @@ def action_calendar(state: State) -> State:
 
 def action_personal(state: State) -> State:
     draft_reply = None
-    if state.trust_phase == TrustPhase.DRAFT and not _is_own_digest(state.email):
+    if state.trust_phase == TrustPhase.DRAFT and not is_own_digest(state.email):
         from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)
@@ -217,7 +221,7 @@ def action_personal(state: State) -> State:
 
 def action_work(state: State) -> State:
     draft_reply = None
-    if state.trust_phase == TrustPhase.DRAFT and not _is_own_digest(state.email):
+    if state.trust_phase == TrustPhase.DRAFT and not is_own_digest(state.email):
         from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)
@@ -245,7 +249,7 @@ def action_banking(state: State) -> State:
 
 def action_application(state: State) -> State:
     draft_reply = None
-    if state.trust_phase == TrustPhase.DRAFT and not _is_own_digest(state.email):
+    if state.trust_phase == TrustPhase.DRAFT and not is_own_digest(state.email):
         from agent.core.drafter import generate_draft
 
         draft_reply = generate_draft(state.email)

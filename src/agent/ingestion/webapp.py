@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, Request, Response
 
 from agent.core.graph import graph
 from agent.core.llm import LLMError
+from agent.core.nodes import is_own_digest
 from agent.core.state import Email, State, TrustPhase
 from agent.crons import digest, quick_digest, renew_watch
 from agent.ingestion import runtime_state
@@ -61,14 +62,15 @@ _configure_logging()
 logger = logging.getLogger(__name__)
 
 _VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN", "")
-_TRUST_PHASE = TrustPhase(os.getenv("TRUST_PHASE", "draft"))
+_TRUST_PHASE = TrustPhase(os.getenv("TRUST_PHASE", "label"))
 _ENABLE_CRONS = os.getenv("ENABLE_CRONS", "false").lower() == "true"
 
 # AI-failure fallback. Reached only when *every* configured provider fails
 # (e.g. Anthropic credits exhausted AND Gemini quota/key bad). On failure the
 # email is left untouched and filed under a review label; an alert is emailed
 # at most once an hour so an outage doesn't spam one message per email.
-_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL", "oscarnolen@gmail.com")
+# `or` (not getenv's default arg) so a present-but-empty env var still falls back.
+_DIGEST_TO = os.getenv("DIGEST_TO_EMAIL") or "oscarnolen@gmail.com"
 _AI_FAILURE_LABEL = "Email Agent/Needs Review"
 _AI_ALERT_LABEL = "Email Agent/Alerts"
 _AI_ALERT_KEY = "last_ai_alert_ts"
@@ -128,6 +130,18 @@ async def _worker() -> None:
     while True:
         email = await _queue.get()
         try:
+            if is_own_digest(email):
+                # Our own digest landing back in the inbox: don't spend an LLM call
+                # classifying it — just archive it. This is the reliable point to
+                # archive (INBOX is definitely set by now), backing up the
+                # send-time archive in the digest crons, which can race delivery.
+                try:
+                    await asyncio.to_thread(apply_action, email.gmail_id, [], archive=True)
+                except Exception:
+                    logger.warning(
+                        "[worker] could not archive own digest %s", email.gmail_id, exc_info=True
+                    )
+                continue
             await graph.ainvoke(State(email=email, trust_phase=_TRUST_PHASE))
             runtime_state.touch_email_processed()
             runtime_state.mark_ai_ok()

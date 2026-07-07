@@ -11,8 +11,8 @@ SECRET_NAME = email-agent/production
 
 # Production agent behaviour. CloudFormation reuses previous parameter values on
 # update, so these must be passed explicitly on every deploy-infra or the stack
-# silently keeps whatever it had. Override on the CLI, e.g. TRUST_PHASE=label.
-TRUST_PHASE  ?= draft
+# silently keeps whatever it had. Override on the CLI, e.g. TRUST_PHASE=draft.
+TRUST_PHASE  ?= label
 ENABLE_CRONS ?= true
 
 .PHONY: start ngrok format check check-fix test renew-watch refresh-token digest quick-digest dashboard backfill smoke \

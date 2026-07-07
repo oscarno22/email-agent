@@ -95,9 +95,11 @@ def main() -> None:
     )
     logger.info("[digest] sent to %s", _DIGEST_TO)
 
-    # The email already went out — a label failure must not undo that.
+    # The email already went out — a label failure must not undo that. Archive so the
+    # digest doesn't clutter the inbox; it stays browsable under its label. Delivery may
+    # add INBOX after this runs, so the webhook worker re-archives own digests on arrival.
     try:
-        apply_action(msg_id, [_DAILY_DIGEST_LABEL], archive=False)
+        apply_action(msg_id, [_DAILY_DIGEST_LABEL], archive=True)
     except Exception:
         logger.warning("[digest] could not label digest email %s", msg_id, exc_info=True)
 
