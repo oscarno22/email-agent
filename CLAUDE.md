@@ -137,6 +137,8 @@ make deploy-infra      # deploys CloudFormation stack (ECS, EFS, IAM, SGs)
 
 **After that:** every push to `main` triggers GitHub Actions → `docker build` (`src/Dockerfile`) → ECR push → ECS task definition update.
 
+**Image tags — `:latest` must always exist.** CI pushes **both** `:<git-sha>` (what ECS actually deploys) and `:latest`. The two paths disagree about which tag they reference, and only the dual push keeps them compatible: GitHub Actions renders the task definition with the immutable `:<git-sha>`, but the CloudFormation `EcrImageUri` parameter defaults to `:latest`, so **`make deploy-infra` rewrites the task definition to `:latest`**. When only SHA tags were pushed, ECR's "keep last 10" lifecycle policy eventually expired the bootstrap `:latest` manifest, and the next `make deploy-infra` pointed the task at a nonexistent image → `CannotPullContainerError`, service to 0 running tasks (happened 2026-07-26). Recovery without a rebuild: re-tag the current commit's image via `aws ecr batch-get-image … | aws ecr put-image --image-tag latest`.
+
 **Key infra decisions:**
 - No ALB — ngrok agent runs as a sidecar container, keeps the existing static domain (`mobilize-shrunk-endless.ngrok-free.dev`). No custom domain or ACM cert needed.
 - The task runs **two containers**: the app (uvicorn on `:2024`, from `src/Dockerfile`) and ngrok. No Postgres/Redis — the graph runs in-process and the cursor lives in SQLite, so the licensed LangGraph server is gone.

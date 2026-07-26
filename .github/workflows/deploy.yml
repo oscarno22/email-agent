@@ -29,12 +29,21 @@ jobs:
       - name: Build image
         env:
           IMAGE_URI: ${{ steps.ecr-login.outputs.registry }}/email-agent:${{ github.sha }}
+          LATEST_URI: ${{ steps.ecr-login.outputs.registry }}/email-agent:latest
         run: |
-          docker build --platform linux/amd64 -f src/Dockerfile -t "$IMAGE_URI" src
+          docker build --platform linux/amd64 -f src/Dockerfile -t "$IMAGE_URI" -t "$LATEST_URI" src
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+          echo "LATEST_URI=$LATEST_URI" >> "$GITHUB_ENV"
 
+      # ECS deploys the immutable :sha tag below, but the CloudFormation template's
+      # EcrImageUri defaults to :latest — so `make deploy-infra` writes a task
+      # definition pointing at :latest. Keep that tag current or an infra deploy
+      # pins an image ECR's lifecycle policy has since expired (CannotPullContainerError,
+      # service to 0 tasks — this happened on 2026-07-26).
       - name: Push to ECR
-        run: docker push "$IMAGE_URI"
+        run: |
+          docker push "$IMAGE_URI"
+          docker push "$LATEST_URI"
 
       - name: Download current ECS task definition
         run: |
