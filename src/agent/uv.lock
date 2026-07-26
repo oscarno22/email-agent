@@ -229,7 +229,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "google-api-python-client", specifier = ">=2.100.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
-    { name = "google-genai", specifier = ">=1.0.0" },
+    { name = "google-genai", specifier = ">=2.9.0" },
     { name = "langgraph", specifier = ">=1.2.4" },
     { name = "mjml-python", specifier = ">=1.4.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },

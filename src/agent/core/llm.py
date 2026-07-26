@@ -133,7 +133,7 @@ class AnthropicProvider(Provider):
 
 # ── Gemini ─────────────────────────────────────────────────────────────────────
 
-_GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 # Free-tier Gemini is rate-limited (a handful of requests/min). On a 429 the API
 # returns a suggested retryDelay; honour it (capped) for a bounded number of
@@ -227,12 +227,18 @@ class GeminiProvider(Provider):
                 system_instruction=system,
                 response_mime_type="application/json",
                 response_schema=_strip_for_gemini(tool_schema),
-                max_output_tokens=400,
-                # Flash is a thinking model and thinking tokens count against
-                # max_output_tokens — left on, they exhaust the budget before
-                # any JSON is emitted (output truncates to '{"'). Classification
-                # doesn't need reasoning tokens, so disable thinking.
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                # Thinking tokens count against max_output_tokens, and a
+                # truncated response comes back as empty text (the guard in
+                # _generate). MINIMAL isn't zero, so leave headroom above what
+                # the JSON itself needs — caps aren't spend, only emitted
+                # tokens are billed.
+                max_output_tokens=1024,
+                # Gemini 3 has no thinking-off switch (and rejects the old
+                # thinking_budget outright); MINIMAL is the documented
+                # equivalent. Classification needs no reasoning tokens.
+                thinking_config=types.ThinkingConfig(
+                    thinking_level=types.ThinkingLevel.MINIMAL
+                ),
             ),
         )
         try:
@@ -255,10 +261,13 @@ class GeminiProvider(Provider):
             user=user,
             config=types.GenerateContentConfig(
                 system_instruction=system,
-                max_output_tokens=max_tokens,
-                # Disable thinking — see structured_completion. Drafts are short
-                # and the thinking budget would otherwise eat the token cap.
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                # Floor the caller's cap so thought tokens can't eat the whole
+                # budget and truncate the draft — see structured_completion.
+                max_output_tokens=max(max_tokens, 1024),
+                # Thinking pinned to MINIMAL — see structured_completion.
+                thinking_config=types.ThinkingConfig(
+                    thinking_level=types.ThinkingLevel.MINIMAL
+                ),
             ),
         )
 
